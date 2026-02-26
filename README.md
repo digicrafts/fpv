@@ -21,7 +21,7 @@ A minimal, keyboard-first TUI file previewer for browsing directories and viewin
 ### Homebrew
 
 ```bash
-brew tap digicrafts/fpv
+brew tap digicrafts/tap
 brew install fpv
 ```
 

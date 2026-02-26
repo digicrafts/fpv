@@ -1,7 +1,7 @@
 # fpv — Fast Previewer TUI
-
+[![release](https://github.com/digicrafts/fpv/actions/workflows/release.yml/badge.svg?style=flat-square)](https://github.com/digicrafts/fpv/actions/workflows/release.yml)
 [![GitHub stars](https://img.shields.io/github/stars/digicrafts/fpv?style=flat-square)](https://github.com/digicrafts/fpv/stargazers)
-[![GitHub downloads](https://img.shields.io/github/downloads/digicrafts/fpv/total?style=flat-square)](https://github.com/digicrafts/fpv/releases)
+[![GitHub downloads](https://img.shields.io/github/downloads/digicrafts/fpv/total)](https://github.com/digicrafts/fpv/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 A minimal, keyboard-first TUI file previewer for browsing directories and viewing code with syntax highlighting in the terminal.

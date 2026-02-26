@@ -241,6 +241,8 @@ jobs:
     env:
       CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
       CLOUDSMITH_REPO: ${{ vars.CLOUDSMITH_REPO }}
+      CLOUDSMITH_DISTRIBUTION: ${{ vars.CLOUDSMITH_DISTRIBUTION }}
+      CLOUDSMITH_RELEASE: ${{ vars.CLOUDSMITH_RELEASE }}
     runs-on: ubuntu-latest
     steps:
       - name: Download .deb artifact
@@ -254,4 +256,17 @@ jobs:
         run: pipx install cloudsmith-cli
       - name: Publish .deb to apt repository (Cloudsmith)
         if: ${{ env.CLOUDSMITH_API_KEY != '' }}
-        run: cloudsmith push deb "${CLOUDSMITH_REPO}" dist/debian-amd64/*.deb --republish
+        shell: bash
+        run: |
+          TARGET_REPO="${CLOUDSMITH_REPO}"
+          if [[ "${CLOUDSMITH_REPO}" != */*/* ]]; then
+            if [[ -z "${CLOUDSMITH_DISTRIBUTION}" ]]; then
+              echo "CLOUDSMITH_REPO must be OWNER/REPO/DISTRO[/RELEASE] or set CLOUDSMITH_DISTRIBUTION."
+              exit 1
+            fi
+            TARGET_REPO="${CLOUDSMITH_REPO}/${CLOUDSMITH_DISTRIBUTION}"
+            if [[ -n "${CLOUDSMITH_RELEASE}" ]]; then
+              TARGET_REPO="${TARGET_REPO}/${CLOUDSMITH_RELEASE}"
+            fi
+          fi
+          cloudsmith push deb "${TARGET_REPO}" dist/debian-amd64/*.deb --republish

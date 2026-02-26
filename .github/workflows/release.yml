@@ -80,6 +80,8 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      linux_x64_file: ${{ steps.meta.outputs.linux_x64_file }}
+      linux_x64_sha: ${{ steps.meta.outputs.linux_x64_sha }}
       macos_x64_file: ${{ steps.meta.outputs.macos_x64_file }}
       macos_x64_sha: ${{ steps.meta.outputs.macos_x64_sha }}
       macos_arm64_file: ${{ steps.meta.outputs.macos_arm64_file }}
@@ -96,11 +98,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
+          LINUX_X64_FILE="$(basename "$(ls dist/binary-x86_64-unknown-linux-gnu/*.tar.gz)")"
           MACOS_X64_FILE="$(basename "$(ls dist/binary-x86_64-apple-darwin/*.tar.gz)")"
           MACOS_ARM64_FILE="$(basename "$(ls dist/binary-aarch64-apple-darwin/*.tar.gz)")"
+          LINUX_X64_SHA="$(sha256sum "dist/binary-x86_64-unknown-linux-gnu/${LINUX_X64_FILE}" | cut -d ' ' -f1)"
           MACOS_X64_SHA="$(sha256sum "dist/binary-x86_64-apple-darwin/${MACOS_X64_FILE}" | cut -d ' ' -f1)"
           MACOS_ARM64_SHA="$(sha256sum "dist/binary-aarch64-apple-darwin/${MACOS_ARM64_FILE}" | cut -d ' ' -f1)"
 
+          echo "linux_x64_file=${LINUX_X64_FILE}" >> "${GITHUB_OUTPUT}"
+          echo "linux_x64_sha=${LINUX_X64_SHA}" >> "${GITHUB_OUTPUT}"
           echo "macos_x64_file=${MACOS_X64_FILE}" >> "${GITHUB_OUTPUT}"
           echo "macos_x64_sha=${MACOS_X64_SHA}" >> "${GITHUB_OUTPUT}"
           echo "macos_arm64_file=${MACOS_ARM64_FILE}" >> "${GITHUB_OUTPUT}"
@@ -145,6 +151,8 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.github-release.outputs.version }}
+          LINUX_X64_FILE: ${{ needs.github-release.outputs.linux_x64_file }}
+          LINUX_X64_SHA: ${{ needs.github-release.outputs.linux_x64_sha }}
           MACOS_X64_FILE: ${{ needs.github-release.outputs.macos_x64_file }}
           MACOS_X64_SHA: ${{ needs.github-release.outputs.macos_x64_sha }}
           MACOS_ARM64_FILE: ${{ needs.github-release.outputs.macos_arm64_file }}
@@ -169,8 +177,13 @@ jobs:
               end
             end
 
+            on_linux do
+              url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${LINUX_X64_FILE}"
+              sha256 "${LINUX_X64_SHA}"
+            end
+
             def install
-              bin.install "fpv"
+              bin.install Dir["*/fpv"].first || "fpv"
             end
           end
           EOF

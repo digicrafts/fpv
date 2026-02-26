@@ -197,7 +197,6 @@ jobs:
           class Fpv < Formula
             desc "Terminal file tree preview tool written in Rust"
             homepage "https://github.com/${GH_REPO}"
-            version "${VERSION}"
 
             on_macos do
               on_arm do

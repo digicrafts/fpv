@@ -2,7 +2,8 @@ use crate::app::preview_controller::refresh_preview;
 use crate::app::state::SessionState;
 use crate::config::keymap::{default_keymap, UserKeymap};
 use crate::config::load::{
-    default_config_path, load_user_config, StatusDisplayMode, ThemeProfile, UserConfig,
+    default_config_path, ensure_default_config_exists, load_user_config, StatusDisplayMode,
+    ThemeProfile, UserConfig,
 };
 use crate::config::merge::{merge_keymaps, merge_theme_profile};
 use crate::config::validate::validate_bindings;
@@ -55,7 +56,11 @@ fn load_bindings_and_theme(
     Vec<String>,
 ) {
     let defaults = default_keymap();
+    let using_default_path = config_path.is_none();
     let path = config_path.unwrap_or_else(default_config_path);
+    if using_default_path {
+        let _ = ensure_default_config_exists(&path);
+    }
     let user_config = load_user_config(&path).unwrap_or(UserConfig {
         mappings: Default::default(),
         theme: Default::default(),
@@ -128,6 +133,7 @@ pub fn run() -> Result<()> {
         state.clamp_preview_scroll(total_preview_lines, preview_viewport_rows);
 
         terminal.draw(|f| {
+            f.render_widget(Clear, f.size());
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -136,6 +142,7 @@ pub fn run() -> Result<()> {
                     Constraint::Length(1),
                 ])
                 .split(f.size());
+            f.render_widget(Clear, chunks[1]);
 
             if state.layout_regions.top_directory_header && !state.preview_fullscreen {
                 draw_current_directory_header(f, chunks[0], &state, &theme);

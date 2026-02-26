@@ -3,8 +3,8 @@ use fpv::app::state::{LayoutRegions, NodeType, SessionState, TreeNode};
 use fpv::config::load::ThemeProfile;
 use fpv::fs::git::{GitFileStatus, GitRepoStatus};
 use fpv::tui::tree_pane::{
-    color_from_name, current_directory_header_line, display_path_with_home, entry_prefix,
-    node_style,
+    color_from_name, current_directory_header_line, directory_contains_uncommitted_changes,
+    display_path_with_home, entry_prefix, node_style,
 };
 use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
@@ -244,4 +244,76 @@ fn preview_defaults_enable_line_numbers_and_disable_wrap() {
     let state = SessionState::new(PathBuf::from("."));
     assert!(state.preview_show_line_numbers);
     assert!(!state.preview_wrap_enabled);
+}
+
+#[test]
+fn directory_change_marker_detects_nested_uncommitted_changes() {
+    let node = TreeNode {
+        path: PathBuf::from("/repo/src"),
+        name: "src".to_string(),
+        node_type: NodeType::Directory,
+        depth: 0,
+        expanded: false,
+        readable: true,
+        children_loaded: true,
+    };
+    let mut file_statuses = std::collections::HashMap::new();
+    file_statuses.insert(PathBuf::from("src/lib/main.rs"), GitFileStatus::Modified);
+
+    let mut state = SessionState::new(PathBuf::from("/repo"));
+    state.git_status = Some(GitRepoStatus {
+        branch: "main".to_string(),
+        repo_root: PathBuf::from("/repo"),
+        file_statuses,
+    });
+
+    assert!(directory_contains_uncommitted_changes(&state, &node));
+}
+
+#[test]
+fn directory_change_marker_ignores_gitignored_entries() {
+    let node = TreeNode {
+        path: PathBuf::from("/repo/target"),
+        name: "target".to_string(),
+        node_type: NodeType::Directory,
+        depth: 0,
+        expanded: false,
+        readable: true,
+        children_loaded: true,
+    };
+    let mut file_statuses = std::collections::HashMap::new();
+    file_statuses.insert(PathBuf::from("target/"), GitFileStatus::Ignored);
+
+    let mut state = SessionState::new(PathBuf::from("/repo"));
+    state.git_status = Some(GitRepoStatus {
+        branch: "main".to_string(),
+        repo_root: PathBuf::from("/repo"),
+        file_statuses,
+    });
+
+    assert!(!directory_contains_uncommitted_changes(&state, &node));
+}
+
+#[test]
+fn directory_change_marker_applies_to_directories_only() {
+    let node = TreeNode {
+        path: PathBuf::from("/repo/src/main.rs"),
+        name: "main.rs".to_string(),
+        node_type: NodeType::File,
+        depth: 0,
+        expanded: false,
+        readable: true,
+        children_loaded: true,
+    };
+    let mut file_statuses = std::collections::HashMap::new();
+    file_statuses.insert(PathBuf::from("src/main.rs"), GitFileStatus::Modified);
+
+    let mut state = SessionState::new(PathBuf::from("/repo"));
+    state.git_status = Some(GitRepoStatus {
+        branch: "main".to_string(),
+        repo_root: PathBuf::from("/repo"),
+        file_statuses,
+    });
+
+    assert!(!directory_contains_uncommitted_changes(&state, &node));
 }

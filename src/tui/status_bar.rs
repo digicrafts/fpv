@@ -119,9 +119,14 @@ pub fn compose_bottom_status_line(
     width: usize,
 ) -> String {
     let raw = format!(
-        "fpv {} | hidden={} preview={}ms | {}",
+        "fpv {} | Show hidden={} Word wrap={} Preview latency={}ms | {}",
         APP_VERSION,
         if state.show_hidden { "on" } else { "off" },
+        if state.preview_wrap_enabled {
+            "on"
+        } else {
+            "off"
+        },
         state.last_preview_latency_ms,
         help_line(bindings)
     );

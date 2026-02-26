@@ -121,7 +121,7 @@ fn directory_selection_shows_neutral_preview_while_file_errors_remain() {
     state.selected_index = 0;
     let dir_doc = refresh_preview(&mut state, &nodes, &ctx, 1024);
     assert!(dir_doc.error_message.is_none());
-    assert_eq!(dir_doc.content_excerpt, "(directory selected)");
+    assert_eq!(dir_doc.content_excerpt, "(empty directory)");
     let meta_line = compose_preview_metadata_line(&state.selected_metadata, 120);
     assert!(meta_line.starts_with("Unknown(none) | "));
 

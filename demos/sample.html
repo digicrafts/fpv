@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Highlight Demo</title>
+    <style>
+      :root {
+        --bg: #f7f3ea;
+        --ink: #102a43;
+        --accent: #ef8354;
+      }
+
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", sans-serif;
+        background: radial-gradient(circle at top right, #ffe8d6, var(--bg));
+        color: var(--ink);
+      }
+
+      .card {
+        max-width: 42rem;
+        margin: 3rem auto;
+        padding: 1.5rem;
+        border-left: 6px solid var(--accent);
+        background: #ffffffcc;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Code Highlight Demo</h1>
+      <p>
+        This sample includes <code>HTML</code>, <code>CSS</code>, and entity escaping like
+        <code>&amp;lt;tag&amp;gt;</code>.
+      </p>
+      <button type="button" onclick="alert('Hello from demo!')">Run Action</button>
+    </main>
+  </body>
+</html>

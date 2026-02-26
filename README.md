@@ -1,56 +1,118 @@
-# fpv
+# fpv — Fast Previewer TUI
 
-Terminal file tree preview tool written in Rust.
+[![GitHub stars](https://img.shields.io/github/stars/digicrafts/fpv?style=flat-square)](https://github.com/digicrafts/fpv/stargazers)
+[![GitHub downloads](https://img.shields.io/github/downloads/digicrafts/fpv/total?style=flat-square)](https://github.com/digicrafts/fpv/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+
+A minimal, keyboard-first TUI file previewer for browsing directories and viewing code with syntax highlighting in the terminal.
+
+---
 
 ## Features
 
-- Single-layer directory navigation: list current directory only
-- `Right` key enters selected directory, `Left` key returns to parent directory
-- Keyboard-first navigation in a split directory/preview TUI
-- Syntax highlighting for common text/code files (HTML, Markdown, Python, Go, JSON, Rust, etc.)
-- Configurable keyboard shortcuts via TOML
-- Safe fallback for binary/unreadable files
+- **Split TUI** — Directory tree on the left, file preview on the right
+- **Syntax highlighting** — Tree-sitter–powered highlighting for many languages (see [Supported file types](#supported-file-types))
+- **Git-aware** — Tree indicators for repository status
+- **Configurable** — Keybindings and theme via a TOML config file
+- **Safe defaults** — Plain-text or fallback preview for binary or unreadable files
 
-## Run
+## Installation
+
+### Homebrew
+
+```bash
+brew tap digicrafts/fpv
+brew install fpv
+```
+
+### From source
+
+See [Build from source](#build-from-source) below.
+
+## Usage
+
+```bash
+# Open current directory
+fpv
+
+# Open a specific path
+fpv /path/to/project
+
+# Use a custom config file
+fpv /path/to/project --config ~/.config/fpv/config
+```
+
+**Quick tips: Press **?** in the app for shortcut help.
+
+## Build from source
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (Rust 1.70+)
+
+### Build and run
+
+```bash
+git clone https://github.com/digicrafts/fpv.git
+cd fpv
+cargo build --release
+```
+
+The binary will be at `target/release/fpv`. Run it with:
+
+```bash
+./target/release/fpv
+# or, if installed: fpv
+```
+
+To run without installing (e.g. for development):
 
 ```bash
 cargo run -- /path/to/project
-```
-
-Custom keymap:
-
-```bash
 cargo run -- /path/to/project --config config/sample.user.toml
 ```
 
-## Quality gates
+## Configuration
 
-```bash
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+On first run, fpv creates a default config at:
+
+- **Linux / macOS:** `~/.config/fpv/config`
+
+You can override keybindings and theme there. Example `config`:
+
+```toml
+[mappings]
+quit = "ctrl+q"
+switch_focus = "ctrl+tab"
+
+[theme]
+directory_color = "yellow"
+hidden_dim_enabled = true
+
+status_display_mode = "bar"   # or "title"
 ```
 
-## Release and publishing workflow
+Config keys under `[mappings]` include: `move_up`, `move_down`, `expand_node`, `collapse_node`, `open_node`, `exit_fullscreen_preview`, `switch_focus`, `page_up`, `page_down`, `preview_scroll_up`, `preview_scroll_down`, `toggle_preview_line_numbers`, `toggle_preview_wrap`, `toggle_help`, `toggle_hidden`, `resize_preview_narrower`, `resize_preview_wider`, `quit`. Use key names like `up`, `down`, `enter`, `tab`, `ctrl+q`, etc.
 
-This repo includes a GitHub Actions release workflow at:
+## Supported file types
 
-`/.github/workflows/release.yml`
+Syntax highlighting is supported for:
 
-On tag push `v*` (for example `v0.2.0`), it will:
-- Run tests
-- Build release archives for Linux and macOS
-- Build a Debian package (`.deb`)
-- Create a GitHub Release with artifacts + `checksums.txt`
+| Category   | Extensions / names |
+| ---------- | ------------------ |
+| Shell      | `bash`, `sh`, `zsh`, `ksh` |
+| C / C++    | `c`, `h`, `cpp`, `cxx`, `hpp`, `hxx` |
+| Web        | `html`, `htm`, `css`, `xml` |
+| Go         | `go` |
+| Java       | `java` |
+| JavaScript / TypeScript | `js`, `jsx`, `mjs`, `cjs`, `ts`, `tsx` |
+| Data       | `json`, `toml`, `yaml`, `yml` |
+| Markdown   | `md`, `markdown` |
+| Python     | `py` |
+| Rust       | `rs` |
 
-Optional publish steps are enabled only when corresponding secrets/variables are set:
-- `crates.io`: set secret `CARGO_REGISTRY_TOKEN`
-- `Homebrew tap`: set secret `HOMEBREW_TAP_TOKEN` and variable `HOMEBREW_TAP_REPO` (format: `owner/homebrew-tap`)
-- `APT (Cloudsmith)`: set secret `CLOUDSMITH_API_KEY` and variable `CLOUDSMITH_REPO` (format: `owner/repo`)
+Other files are shown as plain text or with a safe fallback.
 
-### Typical release flow
+## License
 
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

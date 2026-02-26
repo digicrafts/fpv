@@ -4,7 +4,7 @@ use crate::config::load::ThemeProfile;
 use crate::fs::git::GitFileStatus;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use std::path::{Component, Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
@@ -176,6 +176,7 @@ pub fn draw_tree(
     state: &SessionState,
     theme: &ThemeProfile,
 ) {
+    frame.render_widget(Clear, area);
     if nodes.is_empty() {
         let empty =
             Paragraph::new("(empty directory)").block(Block::default().borders(Borders::ALL));
@@ -194,8 +195,9 @@ pub fn draw_tree(
             } else {
                 format!("{icon} {}", n.name)
             };
+            let right_indicator = right_indicator_for_node(state, n, status);
             let (left_text, padding, right_label) =
-                compose_tree_entry_segments(&left, status, content_width);
+                compose_tree_entry_segments(&left, right_indicator, content_width);
 
             let mut spans = Vec::with_capacity(3);
             spans.push(Span::styled(left_text, node_style(n, theme, status)));
@@ -203,7 +205,10 @@ pub fn draw_tree(
                 spans.push(Span::raw(" ".repeat(padding)));
             }
             if let Some(label) = right_label {
-                spans.push(Span::styled(label, status_label_style(status)));
+                spans.push(Span::styled(
+                    label,
+                    status_label_style(status, right_indicator),
+                ));
             }
 
             ListItem::new(Line::from(spans))
@@ -219,6 +224,45 @@ pub fn draw_tree(
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
+pub fn directory_contains_uncommitted_changes(state: &SessionState, node: &TreeNode) -> bool {
+    if node.node_type != NodeType::Directory {
+        return false;
+    }
+
+    let Some(repo) = state.git_status.as_ref() else {
+        return false;
+    };
+    let abs = absolute_display_path(&node.path);
+    let Ok(rel_dir) = abs.strip_prefix(&repo.repo_root) else {
+        return false;
+    };
+    if rel_dir.as_os_str().is_empty() {
+        return false;
+    }
+
+    repo.file_statuses.iter().any(|(changed_path, status)| {
+        *status != GitFileStatus::Ignored
+            && (changed_path.as_path() == rel_dir || changed_path.starts_with(rel_dir))
+    })
+}
+
+fn right_indicator_for_node(
+    state: &SessionState,
+    node: &TreeNode,
+    status: Option<GitFileStatus>,
+) -> Option<&'static str> {
+    if status == Some(GitFileStatus::Ignored) {
+        return None;
+    }
+    if let Some(status) = status {
+        return Some(status.label());
+    }
+    if directory_contains_uncommitted_changes(state, node) {
+        return Some("*");
+    }
+    None
+}
+
 fn git_status_label_for_node(state: &SessionState, node: &TreeNode) -> Option<GitFileStatus> {
     let repo = state.git_status.as_ref()?;
     let abs = absolute_display_path(&node.path);
@@ -228,18 +272,14 @@ fn git_status_label_for_node(state: &SessionState, node: &TreeNode) -> Option<Gi
 
 fn compose_tree_entry_segments(
     left: &str,
-    status: Option<GitFileStatus>,
+    right_indicator: Option<&'static str>,
     content_width: usize,
 ) -> (String, usize, Option<&'static str>) {
     if content_width == 0 {
         return (String::new(), 0, None);
     }
 
-    let Some(status) = status else {
-        return (truncate_for_status(left, content_width), 0, None);
-    };
-
-    let Some(label) = right_label_for_status(status) else {
+    let Some(label) = right_indicator else {
         return (truncate_for_status(left, content_width), 0, None);
     };
     let reserved = UnicodeWidthStr::width(label).saturating_add(1);
@@ -257,15 +297,15 @@ fn compose_tree_entry_segments(
 
     (left_text, padding, Some(label))
 }
-
-fn right_label_for_status(status: GitFileStatus) -> Option<&'static str> {
-    match status {
-        GitFileStatus::Ignored => None,
-        _ => Some(status.label()),
+fn status_label_style(
+    status: Option<GitFileStatus>,
+    right_indicator: Option<&'static str>,
+) -> Style {
+    if right_indicator == Some("*") {
+        return Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
     }
-}
-
-fn status_label_style(status: Option<GitFileStatus>) -> Style {
     match status {
         Some(GitFileStatus::Deleted) => {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)

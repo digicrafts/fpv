@@ -1,6 +1,6 @@
 use crossterm::event::KeyCode;
 use fpv::config::keymap::{parse_key_combo, Action, UserKeymap};
-use fpv::config::load::{load_user_config, load_user_keymap};
+use fpv::config::load::{ensure_default_config_exists, load_user_config, load_user_keymap};
 use std::collections::HashMap;
 use std::fs;
 use tempfile::tempdir;
@@ -72,4 +72,18 @@ fn parse_status_display_mode_from_config_file() {
         cfg.status_display_mode.map(|m| format!("{m:?}")),
         Some("Title".to_string())
     );
+}
+
+#[test]
+fn ensure_default_config_creates_file_on_first_run() {
+    let d = tempdir().expect("create tempdir");
+    let config_path = d.path().join(".config/fpv/config");
+    assert!(!config_path.exists());
+
+    ensure_default_config_exists(&config_path).expect("create default config");
+    assert!(config_path.exists());
+
+    let cfg = load_user_config(&config_path).expect("load generated config");
+    assert_eq!(cfg.mappings.get("toggle_help"), Some(&"?".to_string()));
+    assert_eq!(cfg.mappings.get("toggle_hidden"), Some(&"h".to_string()));
 }

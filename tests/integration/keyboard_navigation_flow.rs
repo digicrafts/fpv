@@ -43,6 +43,7 @@ fn hidden_toggle_updates_list_and_keeps_valid_selection() {
     let bindings = default_keymap();
     let on_status = compose_bottom_status_line(&state, &bindings, 120);
     assert!(on_status.contains("hidden=on"));
+    assert!(on_status.contains("wrap=off"));
     assert!(on_status.contains("Help (?)"));
 
     let _ = toggle_hidden_visibility(&mut state, &mut nodes).expect("toggle off");
@@ -52,6 +53,7 @@ fn hidden_toggle_updates_list_and_keeps_valid_selection() {
     assert!(state.selected_index < nodes.len() || nodes.is_empty());
     let off_status = compose_bottom_status_line(&state, &bindings, 120);
     assert!(off_status.contains("hidden=off"));
+    assert!(off_status.contains("wrap=off"));
     assert!(off_status.contains("Help (?)"));
     if !previous_path
         .file_name()
@@ -73,4 +75,18 @@ fn keyboard_resize_updates_preview_panel_width() {
 
     state.resize_preview_by(-(state.resize_step() as i16), 100);
     assert_eq!(state.panel_widths(100), (60, 40));
+}
+
+#[test]
+fn status_line_reflects_preview_wrap_state() {
+    let mut state = SessionState::new(PathBuf::from("."));
+    let bindings = default_keymap();
+
+    state.preview_wrap_enabled = false;
+    let off = compose_bottom_status_line(&state, &bindings, 120);
+    assert!(off.contains("wrap=off"));
+
+    state.preview_wrap_enabled = true;
+    let on = compose_bottom_status_line(&state, &bindings, 120);
+    assert!(on.contains("wrap=on"));
 }

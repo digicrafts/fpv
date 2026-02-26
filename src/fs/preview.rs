@@ -11,6 +11,26 @@ fn is_probably_text(bytes: &[u8]) -> bool {
     !bytes.iter().take(BINARY_SAMPLE).any(|b| *b == 0)
 }
 
+fn normalize_line_endings(text: &str) -> String {
+    if !text.contains('\r') {
+        return text.to_string();
+    }
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn sanitize_terminal_control_chars(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\n' => out.push('\n'),
+            '\t' => out.push_str("    "),
+            _ if ch.is_control() => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> PreviewDocument {
     let mut doc = PreviewDocument {
         source_path: PathBuf::from(path),
@@ -43,9 +63,11 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
         Ok(s) => (s.to_string(), false),
         Err(_) => (String::from_utf8_lossy(clip).into_owned(), true),
     };
+    let normalized_content = normalize_line_endings(&content);
+    let safe_content = sanitize_terminal_control_chars(&normalized_content);
     let rendered = if decode_uncertain {
         HighlightRenderResult {
-            rendered_text: content.clone(),
+            rendered_text: safe_content.clone(),
             content_type: ContentType::PlainText,
             language_id: None,
             styled_lines: Vec::new(),
@@ -53,14 +75,14 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
         }
     } else if clip.len() > HIGHLIGHT_MAX_BYTES {
         HighlightRenderResult {
-            rendered_text: content.clone(),
+            rendered_text: safe_content.clone(),
             content_type: ContentType::PlainText,
             language_id: None,
             styled_lines: Vec::new(),
             fallback_reason: Some(PreviewFallbackReason::TooLarge),
         }
     } else {
-        render_with_highlight(ctx, path, &content)
+        render_with_highlight(ctx, path, &safe_content)
     };
 
     doc.load_state = LoadState::Ready;
@@ -75,4 +97,24 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
     };
     doc.truncated = truncated;
     doc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_line_endings, sanitize_terminal_control_chars};
+
+    #[test]
+    fn normalize_line_endings_rewrites_crlf_and_cr() {
+        let input = "a\r\nb\rc\n";
+        let output = normalize_line_endings(input);
+        assert_eq!(output, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn sanitize_terminal_control_chars_strips_ansi_controls() {
+        let input = "ok\x1b[31mred\x1b[0m\tend\n";
+        let output = sanitize_terminal_control_chars(input);
+        assert_eq!(output, "ok [31mred [0m    end\n");
+        assert!(!output.contains('\x1b'));
+    }
 }

@@ -338,9 +338,7 @@ impl HighlightContext {
             "markdown_inline" => self.markdown_inline_config.as_ref(),
             "bash" | "sh" | "shell" | "zsh" | "ksh" => self.bash_config.as_ref(),
             "c" => self.c_config.as_ref(),
-            "cc" | "cp" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => {
-                self.cpp_config.as_ref()
-            }
+            "cc" | "cp" | "cpp" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => self.cpp_config.as_ref(),
             "css" => self.css_config.as_ref(),
             "go" | "golang" => self.go_config.as_ref(),
             "html" | "htm" => self.html_config.as_ref(),

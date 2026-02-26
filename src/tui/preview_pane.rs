@@ -6,7 +6,7 @@ use crate::tui::status_bar::compose_preview_metadata_line;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
@@ -224,6 +224,7 @@ pub fn draw_preview(
     state: &SessionState,
     theme: &ThemeProfile,
 ) {
+    frame.render_widget(Clear, area);
     let title = preview_title_for_state(state);
     let metadata_line =
         preview_border_metadata_for_state(state, area.width.saturating_sub(2) as usize);
@@ -332,6 +333,7 @@ pub fn draw_preview(
         )
     };
     let _ = theme;
+    frame.render_widget(Clear, inner);
     frame.render_widget(content_widget, inner);
     render_scroll_indicator(frame, inner, rendered_total_lines, scroll_row_usize);
 }

@@ -9,7 +9,18 @@ pub fn default_config_path() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".config/fpv/config.toml")
+        .join(".config/fpv/config")
+}
+
+pub fn ensure_default_config_exists(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, include_str!("../../config/default.toml"))?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -5,9 +5,11 @@ use fpv::app::state::{
 };
 use fpv::fs::preview::load_preview;
 use fpv::highlight::syntax::HighlightContext;
-use fpv::tui::preview_pane::preview_total_lines;
+use fpv::tui::preview_pane::{draw_preview, preview_total_lines};
 use fpv::tui::status_bar::compose_preview_metadata_line;
+use ratatui::backend::TestBackend;
 use ratatui::style::Style;
+use ratatui::Terminal;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -215,6 +217,9 @@ fn directory_selection_uses_neutral_preview() {
     let d = tempdir().expect("create tempdir");
     let dir_path = d.path().join("folder");
     fs::create_dir_all(&dir_path).expect("mkdir");
+    fs::write(dir_path.join("a.txt"), "a").expect("write");
+    fs::create_dir_all(dir_path.join("child")).expect("mkdir child");
+    fs::write(dir_path.join(".hidden.txt"), "h").expect("write hidden");
 
     let nodes = vec![TreeNode {
         path: dir_path.clone(),
@@ -232,9 +237,63 @@ fn directory_selection_uses_neutral_preview() {
 
     assert_eq!(doc.load_state, LoadState::Ready);
     assert!(doc.error_message.is_none());
-    assert_eq!(doc.content_excerpt, "(directory selected)");
+    assert!(doc.content_excerpt.contains("child/"));
+    assert!(doc.content_excerpt.contains("a.txt"));
+    assert!(!doc.content_excerpt.contains(".hidden.txt"));
     assert_eq!(state.selected_metadata.filename, "folder");
     assert_eq!(state.selected_metadata.hidden_text, "off");
+}
+
+#[test]
+fn preview_render_clears_previous_content_when_switching_documents() {
+    let mut state = SessionState::new(PathBuf::from("."));
+    state.selected_metadata.filename = "a.txt".to_string();
+    let long_doc = fpv::app::state::PreviewDocument {
+        load_state: LoadState::Ready,
+        content_type: ContentType::PlainText,
+        content_excerpt: "first\nline-that-should-disappear".to_string(),
+        ..fpv::app::state::PreviewDocument::default()
+    };
+    let short_doc = fpv::app::state::PreviewDocument {
+        load_state: LoadState::Ready,
+        content_type: ContentType::PlainText,
+        content_excerpt: "next".to_string(),
+        ..fpv::app::state::PreviewDocument::default()
+    };
+
+    let backend = TestBackend::new(40, 8);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_preview(
+                frame,
+                frame.size(),
+                &long_doc,
+                &state,
+                &fpv::config::load::ThemeProfile::default(),
+            )
+        })
+        .expect("draw long");
+    terminal
+        .draw(|frame| {
+            draw_preview(
+                frame,
+                frame.size(),
+                &short_doc,
+                &state,
+                &fpv::config::load::ThemeProfile::default(),
+            )
+        })
+        .expect("draw short");
+
+    let rendered = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(!rendered.contains("line-that-should-disappear"));
 }
 
 #[test]
@@ -264,4 +323,57 @@ fn preview_total_lines_counts_fallback_header_and_content() {
 
     doc.fallback_reason = None;
     assert_eq!(preview_total_lines(&doc), 2);
+}
+
+#[test]
+fn unsupported_preview_normalizes_carriage_returns() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("notes.unknown");
+    fs::write(&p, b"alpha\r\nbeta\rgamma\n").expect("write file");
+    let ctx = HighlightContext::new();
+    let doc = load_preview(&p, 1024, &ctx);
+
+    assert_eq!(doc.load_state, LoadState::Ready);
+    assert_eq!(doc.content_type, ContentType::PlainText);
+    assert_eq!(
+        doc.fallback_reason,
+        Some(PreviewFallbackReason::UnsupportedExtension)
+    );
+    assert!(!doc.content_excerpt.contains('\r'));
+    assert!(doc.content_excerpt.contains("alpha\nbeta\ngamma\n"));
+}
+
+#[test]
+fn unsupported_preview_strips_terminal_escape_controls() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("unsafe.unknown");
+    fs::write(&p, b"ok\x1b[31mred\x1b[0m\n").expect("write file");
+    let ctx = HighlightContext::new();
+    let doc = load_preview(&p, 1024, &ctx);
+
+    assert_eq!(doc.load_state, LoadState::Ready);
+    assert_eq!(doc.content_type, ContentType::PlainText);
+    assert_eq!(
+        doc.fallback_reason,
+        Some(PreviewFallbackReason::UnsupportedExtension)
+    );
+    assert!(!doc.content_excerpt.contains('\x1b'));
+}
+
+#[test]
+fn unsupported_preview_expands_tabs_for_terminal_stability() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("Makefile");
+    fs::write(&p, "build:\n\t@echo ok\n").expect("write file");
+    let ctx = HighlightContext::new();
+    let doc = load_preview(&p, 1024, &ctx);
+
+    assert_eq!(doc.load_state, LoadState::Ready);
+    assert_eq!(doc.content_type, ContentType::PlainText);
+    assert_eq!(
+        doc.fallback_reason,
+        Some(PreviewFallbackReason::UnsupportedExtension)
+    );
+    assert!(!doc.content_excerpt.contains('\t'));
+    assert!(doc.content_excerpt.contains("    @echo ok"));
 }

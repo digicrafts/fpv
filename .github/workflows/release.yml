@@ -1,0 +1,195 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run tests
+        run: cargo test --locked
+
+  build-binaries:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: fpv
+          - os: macos-13
+            target: x86_64-apple-darwin
+            bin_name: fpv
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bin_name: fpv
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package archive
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARTIFACT="fpv-v${VERSION}-${{ matrix.target }}"
+          mkdir -p "${ARTIFACT}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "${ARTIFACT}/"
+          cp README.md "${ARTIFACT}/"
+          tar -czf "${ARTIFACT}.tar.gz" "${ARTIFACT}"
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: fpv-v*.tar.gz
+          if-no-files-found: error
+
+  build-deb:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+      - name: Build .deb package
+        run: cargo deb --target x86_64-unknown-linux-gnu
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-amd64
+          path: target/x86_64-unknown-linux-gnu/debian/*.deb
+          if-no-files-found: error
+
+  github-release:
+    needs: [build-binaries, build-deb]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      macos_x64_file: ${{ steps.meta.outputs.macos_x64_file }}
+      macos_x64_sha: ${{ steps.meta.outputs.macos_x64_sha }}
+      macos_arm64_file: ${{ steps.meta.outputs.macos_arm64_file }}
+      macos_arm64_sha: ${{ steps.meta.outputs.macos_arm64_sha }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Build release metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+          MACOS_X64_FILE="$(basename "$(ls dist/binary-x86_64-apple-darwin/*.tar.gz)")"
+          MACOS_ARM64_FILE="$(basename "$(ls dist/binary-aarch64-apple-darwin/*.tar.gz)")"
+          MACOS_X64_SHA="$(sha256sum "dist/binary-x86_64-apple-darwin/${MACOS_X64_FILE}" | cut -d ' ' -f1)"
+          MACOS_ARM64_SHA="$(sha256sum "dist/binary-aarch64-apple-darwin/${MACOS_ARM64_FILE}" | cut -d ' ' -f1)"
+
+          echo "macos_x64_file=${MACOS_X64_FILE}" >> "${GITHUB_OUTPUT}"
+          echo "macos_x64_sha=${MACOS_X64_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "macos_arm64_file=${MACOS_ARM64_FILE}" >> "${GITHUB_OUTPUT}"
+          echo "macos_arm64_sha=${MACOS_ARM64_SHA}" >> "${GITHUB_OUTPUT}"
+
+          find dist -type f -maxdepth 3 | sort > files.txt
+          sha256sum dist/*/*.tar.gz dist/debian-amd64/*.deb > checksums.txt
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*/*.tar.gz
+            dist/debian-amd64/*.deb
+            checksums.txt
+
+  publish-crates:
+    needs: github-release
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.CARGO_REGISTRY_TOKEN != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+
+  publish-homebrew:
+    needs: github-release
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.HOMEBREW_TAP_TOKEN != '' && vars.HOMEBREW_TAP_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew tap formula
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.github-release.outputs.version }}
+          MACOS_X64_FILE: ${{ needs.github-release.outputs.macos_x64_file }}
+          MACOS_X64_SHA: ${{ needs.github-release.outputs.macos_x64_sha }}
+          MACOS_ARM64_FILE: ${{ needs.github-release.outputs.macos_arm64_file }}
+          MACOS_ARM64_SHA: ${{ needs.github-release.outputs.macos_arm64_sha }}
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          cat > tap/Formula/fpv.rb <<EOF
+          class Fpv < Formula
+            desc "Terminal file tree preview tool written in Rust"
+            homepage "https://github.com/${GH_REPO}"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${MACOS_ARM64_FILE}"
+                sha256 "${MACOS_ARM64_SHA}"
+              else
+                url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${MACOS_X64_FILE}"
+                sha256 "${MACOS_X64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "fpv"
+            end
+          end
+          EOF
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/fpv.rb
+          git commit -m "fpv ${VERSION}" || exit 0
+          git push
+
+  publish-apt:
+    needs: [github-release, build-deb]
+    if: startsWith(github.ref, 'refs/tags/v') && secrets.CLOUDSMITH_API_KEY != '' && vars.CLOUDSMITH_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: debian-amd64
+          path: dist/debian-amd64
+      - name: Install Cloudsmith CLI
+        run: pipx install cloudsmith-cli
+      - name: Publish .deb to apt repository (Cloudsmith)
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+          CLOUDSMITH_REPO: ${{ vars.CLOUDSMITH_REPO }}
+        run: cloudsmith push deb "${CLOUDSMITH_REPO}" dist/debian-amd64/*.deb --republish

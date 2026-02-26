@@ -1,0 +1,3 @@
+[mappings]
+quit = "ctrl+q"
+switch_focus = "ctrl+tab"

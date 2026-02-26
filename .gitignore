@@ -1,0 +1,33 @@
+# Rust
+/target/
+/debug/
+/release/
+*.rs.bk
+*.rlib
+*.prof*
+Cargo.lock
+
+# Environment and logs
+*.log
+.env*
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.agents/
+.agents/*
+.codex/
+.codex/*
+.specify/
+.specify/*
+.github/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp

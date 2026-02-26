@@ -27,18 +27,42 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: fpv
+            build_tool: cargo
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            bin_name: fpv
+            build_tool: cross
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin_name: fpv
+            build_tool: cross
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            bin_name: fpv
+            build_tool: cross
           - os: macos-15-intel
             target: x86_64-apple-darwin
             bin_name: fpv
+            build_tool: cargo
           - os: macos-14
             target: aarch64-apple-darwin
             bin_name: fpv
+            build_tool: cargo
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        if: ${{ matrix.build_tool == 'cross' }}
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
       - name: Build binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.build_tool }}" = "cross" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
       - name: Package archive
         shell: bash
         run: |
@@ -51,7 +75,7 @@ jobs:
       - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.target }}
+          name: fpv-${{ matrix.target }}
           path: fpv-v*.tar.gz
           if-no-files-found: error
 
@@ -82,6 +106,8 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       linux_x64_file: ${{ steps.meta.outputs.linux_x64_file }}
       linux_x64_sha: ${{ steps.meta.outputs.linux_x64_sha }}
+      linux_arm64_file: ${{ steps.meta.outputs.linux_arm64_file }}
+      linux_arm64_sha: ${{ steps.meta.outputs.linux_arm64_sha }}
       macos_x64_file: ${{ steps.meta.outputs.macos_x64_file }}
       macos_x64_sha: ${{ steps.meta.outputs.macos_x64_sha }}
       macos_arm64_file: ${{ steps.meta.outputs.macos_arm64_file }}
@@ -98,15 +124,19 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
-          LINUX_X64_FILE="$(basename "$(ls dist/binary-x86_64-unknown-linux-gnu/*.tar.gz)")"
-          MACOS_X64_FILE="$(basename "$(ls dist/binary-x86_64-apple-darwin/*.tar.gz)")"
-          MACOS_ARM64_FILE="$(basename "$(ls dist/binary-aarch64-apple-darwin/*.tar.gz)")"
-          LINUX_X64_SHA="$(sha256sum "dist/binary-x86_64-unknown-linux-gnu/${LINUX_X64_FILE}" | cut -d ' ' -f1)"
-          MACOS_X64_SHA="$(sha256sum "dist/binary-x86_64-apple-darwin/${MACOS_X64_FILE}" | cut -d ' ' -f1)"
-          MACOS_ARM64_SHA="$(sha256sum "dist/binary-aarch64-apple-darwin/${MACOS_ARM64_FILE}" | cut -d ' ' -f1)"
+          LINUX_X64_FILE="$(basename "$(ls dist/fpv-x86_64-unknown-linux-gnu/*.tar.gz)")"
+          LINUX_ARM64_FILE="$(basename "$(ls dist/fpv-aarch64-unknown-linux-gnu/*.tar.gz)")"
+          MACOS_X64_FILE="$(basename "$(ls dist/fpv-x86_64-apple-darwin/*.tar.gz)")"
+          MACOS_ARM64_FILE="$(basename "$(ls dist/fpv-aarch64-apple-darwin/*.tar.gz)")"
+          LINUX_X64_SHA="$(sha256sum "dist/fpv-x86_64-unknown-linux-gnu/${LINUX_X64_FILE}" | cut -d ' ' -f1)"
+          LINUX_ARM64_SHA="$(sha256sum "dist/fpv-aarch64-unknown-linux-gnu/${LINUX_ARM64_FILE}" | cut -d ' ' -f1)"
+          MACOS_X64_SHA="$(sha256sum "dist/fpv-x86_64-apple-darwin/${MACOS_X64_FILE}" | cut -d ' ' -f1)"
+          MACOS_ARM64_SHA="$(sha256sum "dist/fpv-aarch64-apple-darwin/${MACOS_ARM64_FILE}" | cut -d ' ' -f1)"
 
           echo "linux_x64_file=${LINUX_X64_FILE}" >> "${GITHUB_OUTPUT}"
           echo "linux_x64_sha=${LINUX_X64_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "linux_arm64_file=${LINUX_ARM64_FILE}" >> "${GITHUB_OUTPUT}"
+          echo "linux_arm64_sha=${LINUX_ARM64_SHA}" >> "${GITHUB_OUTPUT}"
           echo "macos_x64_file=${MACOS_X64_FILE}" >> "${GITHUB_OUTPUT}"
           echo "macos_x64_sha=${MACOS_X64_SHA}" >> "${GITHUB_OUTPUT}"
           echo "macos_arm64_file=${MACOS_ARM64_FILE}" >> "${GITHUB_OUTPUT}"
@@ -153,6 +183,8 @@ jobs:
           VERSION: ${{ needs.github-release.outputs.version }}
           LINUX_X64_FILE: ${{ needs.github-release.outputs.linux_x64_file }}
           LINUX_X64_SHA: ${{ needs.github-release.outputs.linux_x64_sha }}
+          LINUX_ARM64_FILE: ${{ needs.github-release.outputs.linux_arm64_file }}
+          LINUX_ARM64_SHA: ${{ needs.github-release.outputs.linux_arm64_sha }}
           MACOS_X64_FILE: ${{ needs.github-release.outputs.macos_x64_file }}
           MACOS_X64_SHA: ${{ needs.github-release.outputs.macos_x64_sha }}
           MACOS_ARM64_FILE: ${{ needs.github-release.outputs.macos_arm64_file }}
@@ -168,18 +200,27 @@ jobs:
             version "${VERSION}"
 
             on_macos do
-              if Hardware::CPU.arm?
+              on_arm do
                 url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${MACOS_ARM64_FILE}"
                 sha256 "${MACOS_ARM64_SHA}"
-              else
+              end
+
+              on_intel do
                 url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${MACOS_X64_FILE}"
                 sha256 "${MACOS_X64_SHA}"
               end
             end
 
             on_linux do
-              url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${LINUX_X64_FILE}"
-              sha256 "${LINUX_X64_SHA}"
+              on_arm do
+                url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${LINUX_ARM64_FILE}"
+                sha256 "${LINUX_ARM64_SHA}"
+              end
+
+              on_intel do
+                url "https://github.com/${GH_REPO}/releases/download/v${VERSION}/${LINUX_X64_FILE}"
+                sha256 "${LINUX_X64_SHA}"
+              end
             end
 
             def install

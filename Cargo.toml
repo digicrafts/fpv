@@ -2,6 +2,14 @@
 name = "fpv"
 version = "0.1.0"
 edition = "2021"
+description = "A minimal, keyboard-first TUI file previewer with syntax highlighting"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/digicrafts/fpv"
+homepage = "https://github.com/digicrafts/fpv"
+documentation = "https://docs.rs/fpv"
+keywords = ["tui", "terminal", "preview", "cli", "rust"]
+categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 anyhow = "1"

@@ -152,6 +152,7 @@ jobs:
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
         run: |
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          mkdir -p tap/Formula
           cat > tap/Formula/fpv.rb <<EOF
           class Fpv < Formula
             desc "Terminal file tree preview tool written in Rust"

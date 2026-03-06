@@ -8,6 +8,9 @@ A minimal, keyboard-first TUI file previewer for browsing directories and viewin
 
 ---
 
+<img width="2282" height="1600" alt="image" src="https://github.com/user-attachments/assets/4c7e0485-0b64-41db-a745-e069aeb67416" />
+
+
 ## Features
 
 - **Split TUI** — Directory tree on the left, file preview on the right

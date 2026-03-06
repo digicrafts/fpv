@@ -28,6 +28,13 @@ use ratatui::Terminal;
 use std::env;
 use std::io;
 use std::path::PathBuf;
+use std::time::Instant;
+
+fn dir_mtime(path: &PathBuf) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+}
 
 fn parse_args() -> (PathBuf, Option<PathBuf>) {
     let mut root = PathBuf::from(".");
@@ -125,7 +132,30 @@ pub fn run() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let mut last_auto_refresh = Instant::now();
+    let auto_refresh_interval = std::time::Duration::from_secs(2);
+    let mut last_dir_mtime = dir_mtime(&state.current_path);
+
     loop {
+        // Auto-refresh: check if directory mtime changed
+        if last_auto_refresh.elapsed() >= auto_refresh_interval {
+            last_auto_refresh = Instant::now();
+            let current_mtime = dir_mtime(&state.current_path);
+            if current_mtime != last_dir_mtime {
+                last_dir_mtime = current_mtime;
+                let prev_path = state.selected_path.clone();
+                nodes = list_current_directory_with_visibility(
+                    &state.current_path,
+                    2000,
+                    state.show_hidden,
+                )?;
+                state.restore_or_default_selection(&nodes, Some(&prev_path));
+                state.update_selected_path(&nodes);
+                state.git_status = git_repo_status_for_path(&state.current_path);
+                preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
+            }
+        }
+
         let frame_size = terminal.size()?;
         state.normalize_preview_width(frame_size.width);
         let preview_viewport_rows = frame_size.height.saturating_sub(4) as usize;
@@ -149,7 +179,7 @@ pub fn run() -> Result<()> {
             }
 
             if state.preview_fullscreen {
-                draw_preview(f, chunks[1], &preview, &state, &theme);
+                draw_preview(f, chunks[1], &preview, &mut state, &theme);
             } else {
                 let main = Layout::default()
                     .direction(Direction::Horizontal)
@@ -162,7 +192,7 @@ pub fn run() -> Result<()> {
                     })
                     .split(chunks[1]);
                 draw_tree(f, main[0], &nodes, &state, &theme);
-                draw_preview(f, main[1], &preview, &state, &theme);
+                draw_preview(f, main[1], &preview, &mut state, &theme);
             }
             draw_status(f, chunks[2], &state, &bindings);
 
@@ -183,21 +213,37 @@ pub fn run() -> Result<()> {
         })?;
 
         let previous_path = state.current_path.clone();
-        let (should_quit, should_refresh_preview) = process_once(
+        let (should_quit, should_refresh_preview, should_refresh_tree) = process_once(
             &mut state,
             &mut nodes,
             &bindings,
             total_preview_lines,
             preview_viewport_rows,
+            &preview,
         )?;
         if should_quit {
             break;
         }
-        if state.current_path != previous_path {
+        if should_refresh_tree {
+            let prev_selected = state.selected_path.clone();
+            nodes = list_current_directory_with_visibility(
+                &state.current_path,
+                2000,
+                state.show_hidden,
+            )?;
+            state.restore_or_default_selection(&nodes, Some(&prev_selected));
+            state.update_selected_path(&nodes);
             state.git_status = git_repo_status_for_path(&state.current_path);
-        }
-        if should_refresh_preview {
+            last_dir_mtime = dir_mtime(&state.current_path);
             preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
+        } else {
+            if state.current_path != previous_path {
+                state.git_status = git_repo_status_for_path(&state.current_path);
+                last_dir_mtime = dir_mtime(&state.current_path);
+            }
+            if should_refresh_preview {
+                preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
+            }
         }
     }
 

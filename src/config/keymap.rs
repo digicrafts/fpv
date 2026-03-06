@@ -16,12 +16,15 @@ pub enum Action {
     PageDown,
     PreviewScrollUp,
     PreviewScrollDown,
+    PreviewScrollLeft,
+    PreviewScrollRight,
     TogglePreviewLineNumbers,
     TogglePreviewWrap,
     ToggleHelp,
     ToggleHidden,
     ResizePreviewNarrower,
     ResizePreviewWider,
+    Refresh,
     Quit,
 }
 
@@ -79,6 +82,14 @@ pub fn default_keymap() -> HashMap<Action, KeyEvent> {
             KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
         ),
         (
+            Action::PreviewScrollLeft,
+            KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE),
+        ),
+        (
+            Action::PreviewScrollRight,
+            KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
+        ),
+        (
             Action::TogglePreviewLineNumbers,
             KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
         ),
@@ -103,6 +114,10 @@ pub fn default_keymap() -> HashMap<Action, KeyEvent> {
             KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
         ),
         (
+            Action::Refresh,
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+        ),
+        (
             Action::Quit,
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ),
@@ -122,12 +137,15 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "page_down" => Some(Action::PageDown),
         "preview_scroll_up" => Some(Action::PreviewScrollUp),
         "preview_scroll_down" => Some(Action::PreviewScrollDown),
+        "preview_scroll_left" => Some(Action::PreviewScrollLeft),
+        "preview_scroll_right" => Some(Action::PreviewScrollRight),
         "toggle_preview_line_numbers" => Some(Action::TogglePreviewLineNumbers),
         "toggle_preview_wrap" => Some(Action::TogglePreviewWrap),
         "toggle_help" => Some(Action::ToggleHelp),
         "toggle_hidden" => Some(Action::ToggleHidden),
         "resize_preview_narrower" => Some(Action::ResizePreviewNarrower),
         "resize_preview_wider" => Some(Action::ResizePreviewWider),
+        "refresh" => Some(Action::Refresh),
         "quit" => Some(Action::Quit),
         _ => None,
     }
@@ -153,6 +171,13 @@ pub fn parse_key_combo(value: &str) -> Result<KeyEvent> {
             "pageup" => code = Some(KeyCode::PageUp),
             "pagedown" => code = Some(KeyCode::PageDown),
             "esc" => code = Some(KeyCode::Esc),
+            s if s.starts_with('f') && s.len() > 1 => {
+                if let Ok(n) = s[1..].parse::<u8>() {
+                    code = Some(KeyCode::F(n));
+                } else {
+                    return Err(anyhow!("invalid key combo: {value}"));
+                }
+            }
             single if single.len() == 1 => {
                 code = Some(KeyCode::Char(single.chars().next().unwrap_or(' ')));
             }

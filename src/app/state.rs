@@ -46,6 +46,30 @@ pub enum PreviewFallbackReason {
     DecodeUncertain,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentPosition {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewSelection {
+    pub anchor: ContentPosition,
+    pub cursor: ContentPosition,
+}
+
+impl PreviewSelection {
+    pub fn ordered(&self) -> (ContentPosition, ContentPosition) {
+        if self.anchor.row < self.cursor.row
+            || (self.anchor.row == self.cursor.row && self.anchor.col <= self.cursor.col)
+        {
+            (self.anchor, self.cursor)
+        } else {
+            (self.cursor, self.anchor)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StyledPreviewSegment {
     pub text: String,
@@ -153,6 +177,12 @@ pub struct SessionState {
     pub preview_wrap_enabled: bool,
     pub preview_fullscreen: bool,
     pub divider_drag_active: bool,
+    pub preview_scroll_col: usize,
+    pub preview_selection: Option<PreviewSelection>,
+    pub preview_selecting: bool,
+    pub preview_inner_rect: (u16, u16, u16, u16),
+    pub preview_line_number_cols: usize,
+    pub preview_copy_indicator: bool,
     pub help_overlay_visible: bool,
     pub status_display_mode: StatusDisplayMode,
     pub git_status: Option<GitRepoStatus>,
@@ -185,6 +215,12 @@ impl SessionState {
             preview_wrap_enabled: false,
             preview_fullscreen: false,
             divider_drag_active: false,
+            preview_scroll_col: 0,
+            preview_selection: None,
+            preview_selecting: false,
+            preview_inner_rect: (0, 0, 0, 0),
+            preview_line_number_cols: 0,
+            preview_copy_indicator: false,
             help_overlay_visible: false,
             status_display_mode: StatusDisplayMode::Bar,
             git_status: None,
@@ -207,6 +243,9 @@ impl SessionState {
 
     pub fn reset_preview_scroll(&mut self) {
         self.preview_scroll_row = 0;
+        self.preview_scroll_col = 0;
+        self.preview_selection = None;
+        self.preview_selecting = false;
     }
 
     pub fn clamp_preview_scroll(&mut self, total_lines: usize, viewport_rows: usize) {
@@ -223,6 +262,18 @@ impl SessionState {
         } else if delta > 0 {
             self.preview_scroll_row = self
                 .preview_scroll_row
+                .saturating_add(delta as usize)
+                .min(max_scroll);
+        }
+    }
+
+    pub fn scroll_preview_cols(&mut self, delta: isize, max_width: usize, viewport_cols: usize) {
+        let max_scroll = max_width.saturating_sub(viewport_cols);
+        if delta < 0 {
+            self.preview_scroll_col = self.preview_scroll_col.saturating_sub((-delta) as usize);
+        } else {
+            self.preview_scroll_col = self
+                .preview_scroll_col
                 .saturating_add(delta as usize)
                 .min(max_scroll);
         }

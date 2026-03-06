@@ -189,8 +189,7 @@ fn apply_selection_highlight(
     }
 }
 
-fn render_copy_indicator(frame: &mut Frame<'_>, inner: ratatui::layout::Rect) {
-    let label = " Copy Completed ";
+fn render_overlay_label(frame: &mut Frame<'_>, inner: ratatui::layout::Rect, label: &str, style: Style) {
     let label_width = label.len() as u16;
     if inner.width < label_width || inner.height == 0 {
         return;
@@ -198,10 +197,6 @@ fn render_copy_indicator(frame: &mut Frame<'_>, inner: ratatui::layout::Rect) {
     let x = inner.x + inner.width.saturating_sub(label_width);
     let y = inner.y;
     let area = ratatui::layout::Rect::new(x, y, label_width, 1);
-    let style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::White)
-        .add_modifier(Modifier::BOLD);
     let widget = Paragraph::new(Span::styled(label, style));
     frame.render_widget(widget, area);
 }
@@ -487,7 +482,14 @@ pub fn draw_preview(
         );
     }
 
+    let bold_inverted = Style::default()
+        .fg(Color::Black)
+        .bg(Color::White)
+        .add_modifier(Modifier::BOLD);
+
     if state.preview_copy_indicator {
-        render_copy_indicator(frame, inner);
+        render_overlay_label(frame, inner, " Copy Completed ", bold_inverted);
+    } else if state.preview_copying_indicator {
+        render_overlay_label(frame, inner, " Copying... ", bold_inverted);
     }
 }

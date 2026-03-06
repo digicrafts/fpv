@@ -269,6 +269,7 @@ fn copy_to_clipboard(text: &str) {
 
 fn finalize_selection(state: &mut SessionState, preview_doc: &PreviewDocument) {
     state.preview_selecting = false;
+    state.preview_copying_indicator = false;
     if let Some(sel) = &state.preview_selection {
         if sel.anchor == sel.cursor {
             state.preview_selection = None;
@@ -303,6 +304,7 @@ pub fn process_once(
             state.preview_selection = None;
             state.preview_selecting = false;
             state.preview_copy_indicator = false;
+            state.preview_copying_indicator = false;
 
             if !state.help_overlay_visible && key.modifiers.contains(KeyModifiers::SHIFT) {
                 use crossterm::event::KeyCode;
@@ -631,6 +633,7 @@ pub fn process_once(
                                 cursor: pos,
                             });
                             state.preview_selecting = true;
+                            state.preview_copying_indicator = true;
                         } else if !tree_clicked {
                             state.preview_selection = None;
                             state.preview_selecting = false;

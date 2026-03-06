@@ -1,5 +1,6 @@
 use crate::app::state::{LoadState, NodeType, PreviewDocument, SessionState, TreeNode};
 use crate::fs::current_dir::{list_current_directory_with_visibility, selected_entry_metadata};
+use crate::fs::git::{git_repo_status_for_path, GitFileStatus, GitRepoStatus};
 use crate::fs::preview::load_preview;
 use crate::highlight::syntax::HighlightContext;
 use std::path::Path;
@@ -16,14 +17,74 @@ fn directory_entry_label(node: &TreeNode) -> String {
     }
 }
 
+fn git_status_for_entry(
+    node: &TreeNode,
+    dir_path: &Path,
+    git: &GitRepoStatus,
+) -> Option<GitFileStatus> {
+    let rel = node.path.strip_prefix(&git.repo_root).ok()?;
+
+    // Direct match for files
+    if let Some(status) = git.file_statuses.get(rel) {
+        return Some(*status);
+    }
+
+    // For directories, check if any child has a status
+    if node.node_type == NodeType::Directory {
+        for (path, status) in &git.file_statuses {
+            if path.starts_with(rel) && *status != GitFileStatus::Ignored {
+                return Some(GitFileStatus::Modified);
+            }
+        }
+        return None;
+    }
+
+    // Try relative to the directory being previewed
+    let dir_rel = dir_path
+        .strip_prefix(&git.repo_root)
+        .ok()
+        .map(|d| d.join(&node.name));
+    if let Some(dr) = dir_rel {
+        if let Some(status) = git.file_statuses.get(&dr) {
+            return Some(*status);
+        }
+    }
+
+    None
+}
+
+fn format_git_label(status: GitFileStatus) -> &'static str {
+    match status {
+        GitFileStatus::Added => "[A]",
+        GitFileStatus::Modified => "[M]",
+        GitFileStatus::Deleted => "[D]",
+        GitFileStatus::Renamed => "[R]",
+        GitFileStatus::Copied => "[C]",
+        GitFileStatus::Untracked => "[?]",
+        GitFileStatus::Conflicted => "[U]",
+        GitFileStatus::Ignored => "[!]",
+    }
+}
+
 fn directory_preview(path: &Path, show_hidden: bool) -> PreviewDocument {
     match list_current_directory_with_visibility(path, DIRECTORY_PREVIEW_MAX_ENTRIES, show_hidden) {
         Ok(entries) => {
+            let git = git_repo_status_for_path(path);
             let mut lines = Vec::with_capacity(entries.len().saturating_add(1));
             if entries.is_empty() {
                 lines.push("(empty directory)".to_string());
             } else {
-                lines.extend(entries.iter().map(directory_entry_label));
+                for node in &entries {
+                    let name = directory_entry_label(node);
+                    if let Some(git_status) = git
+                        .as_ref()
+                        .and_then(|g| git_status_for_entry(node, path, g))
+                    {
+                        lines.push(format!("{} {}", format_git_label(git_status), name));
+                    } else {
+                        lines.push(format!("    {}", name));
+                    }
+                }
             }
             PreviewDocument {
                 source_path: path.to_path_buf(),

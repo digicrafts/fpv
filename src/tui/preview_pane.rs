@@ -1,10 +1,10 @@
 use crate::app::state::{
-    ContentType, LoadState, PreviewDocument, PreviewFallbackReason, SessionState,
+    ContentType, LoadState, PreviewDocument, PreviewFallbackReason, PreviewSelection, SessionState,
 };
 use crate::config::load::ThemeProfile;
 use crate::tui::status_bar::compose_preview_metadata_line;
 use ratatui::layout::Alignment;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -77,6 +77,128 @@ pub fn preview_total_lines(doc: &PreviewDocument) -> usize {
         return doc.styled_lines.len();
     }
     line_count(&plain_text_for_doc(doc))
+}
+
+pub fn preview_max_line_width(doc: &PreviewDocument) -> usize {
+    if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+        doc.styled_lines
+            .iter()
+            .map(|line| line.iter().map(|seg| seg.text.chars().count()).sum::<usize>())
+            .max()
+            .unwrap_or(0)
+    } else {
+        plain_text_for_doc(doc)
+            .lines()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+pub fn extract_selected_text(doc: &PreviewDocument, selection: &PreviewSelection) -> String {
+    let (start, end) = selection.ordered();
+    let lines: Vec<String> =
+        if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+            doc.styled_lines
+                .iter()
+                .map(|line| line.iter().map(|seg| seg.text.as_str()).collect::<String>())
+                .collect()
+        } else {
+            plain_text_for_doc(doc)
+                .lines()
+                .map(|s| s.to_string())
+                .collect()
+        };
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    for row in start.row..=end.row.min(lines.len().saturating_sub(1)) {
+        let line = &lines[row];
+        let chars: Vec<char> = line.chars().collect();
+        let line_start = if row == start.row {
+            start.col.min(chars.len())
+        } else {
+            0
+        };
+        let line_end = if row == end.row {
+            (end.col + 1).min(chars.len())
+        } else {
+            chars.len()
+        };
+        if line_start <= line_end {
+            result.extend(&chars[line_start..line_end]);
+        }
+        if row < end.row {
+            result.push('\n');
+        }
+    }
+    result
+}
+
+fn apply_selection_highlight(
+    frame: &mut Frame<'_>,
+    inner: ratatui::layout::Rect,
+    selection: &PreviewSelection,
+    scroll_row: usize,
+    scroll_col: usize,
+    line_number_cols: usize,
+) {
+    let (start, end) = selection.ordered();
+    let buf = frame.buffer_mut();
+
+    for screen_y in inner.y..inner.y.saturating_add(inner.height) {
+        let content_row = (screen_y.saturating_sub(inner.y)) as usize + scroll_row;
+
+        for screen_x in inner.x..inner.x.saturating_add(inner.width) {
+            let screen_col_offset = (screen_x.saturating_sub(inner.x)) as usize;
+
+            let content_col = if line_number_cols > 0 {
+                if screen_col_offset < line_number_cols {
+                    continue;
+                }
+                screen_col_offset - line_number_cols + scroll_col
+            } else {
+                screen_col_offset + scroll_col
+            };
+
+            let in_selection = if content_row > start.row && content_row < end.row {
+                true
+            } else if content_row == start.row && content_row == end.row {
+                content_col >= start.col && content_col <= end.col
+            } else if content_row == start.row {
+                content_col >= start.col
+            } else if content_row == end.row {
+                content_col <= end.col
+            } else {
+                false
+            };
+
+            if in_selection {
+                let cell = buf.get_mut(screen_x, screen_y);
+                let s = cell
+                    .style()
+                    .bg(Color::LightBlue)
+                    .fg(Color::Black)
+                    .remove_modifier(Modifier::DIM);
+                cell.set_style(s);
+            }
+        }
+    }
+}
+
+fn render_overlay_label(frame: &mut Frame<'_>, inner: ratatui::layout::Rect, label: &str, style: Style) {
+    let label_width = label.len() as u16;
+    if inner.width < label_width || inner.height == 0 {
+        return;
+    }
+    let x = inner.x + inner.width.saturating_sub(label_width);
+    let y = inner.y;
+    let area = ratatui::layout::Rect::new(x, y, label_width, 1);
+    let widget = Paragraph::new(Span::styled(label, style));
+    frame.render_widget(widget, area);
 }
 
 fn is_unsupported_preview(doc: &PreviewDocument) -> bool {
@@ -221,7 +343,7 @@ pub fn draw_preview(
     frame: &mut Frame<'_>,
     area: ratatui::layout::Rect,
     doc: &PreviewDocument,
-    state: &SessionState,
+    state: &mut SessionState,
     theme: &ThemeProfile,
 ) {
     frame.render_widget(Clear, area);
@@ -238,17 +360,25 @@ pub fn draw_preview(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    state.preview_inner_rect = (inner.x, inner.y, inner.width, inner.height);
+
     let text = plain_text_for_doc(doc);
     let scroll_row_usize = state.preview_scroll_row;
     let scroll_row = scroll_row_usize.min(u16::MAX as usize) as u16;
+    let scroll_col = if state.preview_wrap_enabled {
+        0u16
+    } else {
+        state.preview_scroll_col.min(u16::MAX as usize) as u16
+    };
     let show_line_numbers = line_numbers_enabled(state, doc);
     let use_wrap = state.preview_wrap_enabled;
 
     let (content_widget, rendered_total_lines) = if show_line_numbers {
         if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
             let total_lines = doc.styled_lines.len();
-            let line_number_cols = line_number_width(total_lines) + 1;
-            let content_width = inner.width.saturating_sub(line_number_cols as u16).max(1) as usize;
+            let ln_cols = line_number_width(total_lines) + 1;
+            state.preview_line_number_cols = ln_cols;
+            let content_width = inner.width.saturating_sub(ln_cols as u16).max(1) as usize;
             let mut lines = Vec::new();
 
             for (index, styled_line) in doc.styled_lines.iter().enumerate() {
@@ -275,14 +405,15 @@ pub fn draw_preview(
             }
             let rendered_total = lines.len();
             (
-                Paragraph::new(Text::from(lines)).scroll((scroll_row, 0)),
+                Paragraph::new(Text::from(lines)).scroll((scroll_row, scroll_col)),
                 rendered_total,
             )
         } else {
             let rows = text.split('\n').collect::<Vec<_>>();
             let total_lines = rows.len().max(1);
-            let line_number_cols = line_number_width(total_lines) + 1;
-            let content_width = inner.width.saturating_sub(line_number_cols as u16).max(1) as usize;
+            let ln_cols = line_number_width(total_lines) + 1;
+            state.preview_line_number_cols = ln_cols;
+            let content_width = inner.width.saturating_sub(ln_cols as u16).max(1) as usize;
             let mut lines = Vec::new();
 
             for (index, row) in rows.iter().enumerate() {
@@ -305,11 +436,12 @@ pub fn draw_preview(
             }
             let rendered_total = lines.len();
             (
-                Paragraph::new(Text::from(lines)).scroll((scroll_row, 0)),
+                Paragraph::new(Text::from(lines)).scroll((scroll_row, scroll_col)),
                 rendered_total,
             )
         }
     } else if use_wrap {
+        state.preview_line_number_cols = 0;
         let mut rendered_total = 0usize;
         for row in text.split('\n') {
             rendered_total = rendered_total.saturating_add(
@@ -327,8 +459,9 @@ pub fn draw_preview(
             rendered_total.max(1),
         )
     } else {
+        state.preview_line_number_cols = 0;
         (
-            Paragraph::new(text).scroll((scroll_row, 0)),
+            Paragraph::new(text).scroll((scroll_row, scroll_col)),
             preview_total_lines(doc),
         )
     };
@@ -336,4 +469,27 @@ pub fn draw_preview(
     frame.render_widget(Clear, inner);
     frame.render_widget(content_widget, inner);
     render_scroll_indicator(frame, inner, rendered_total_lines, scroll_row_usize);
+
+    if let Some(sel) = &state.preview_selection {
+        let sel_clone = sel.clone();
+        apply_selection_highlight(
+            frame,
+            inner,
+            &sel_clone,
+            scroll_row_usize,
+            state.preview_scroll_col,
+            state.preview_line_number_cols,
+        );
+    }
+
+    let bold_inverted = Style::default()
+        .fg(Color::Black)
+        .bg(Color::White)
+        .add_modifier(Modifier::BOLD);
+
+    if state.preview_copy_indicator {
+        render_overlay_label(frame, inner, " Copy Completed ", bold_inverted);
+    } else if state.preview_copying_indicator {
+        render_overlay_label(frame, inner, " Copying... ", bold_inverted);
+    }
 }

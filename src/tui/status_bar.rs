@@ -25,6 +25,7 @@ fn key_display(bindings: &HashMap<Action, KeyEvent>, action: Action, default: &s
             crossterm::event::KeyCode::PageUp => "PageUp".to_string(),
             crossterm::event::KeyCode::PageDown => "PageDown".to_string(),
             crossterm::event::KeyCode::Esc => "Esc".to_string(),
+            crossterm::event::KeyCode::F(n) => format!("F{n}"),
             crossterm::event::KeyCode::Char(c) => c.to_string(),
             _ => format!("{:?}", k.code),
         })
@@ -52,11 +53,14 @@ pub fn compose_shortcut_help_text(bindings: &HashMap<Action, KeyEvent>) -> Strin
     let scroll_down = key_display(bindings, Action::PreviewScrollDown, "/");
     let toggle_lines = key_display(bindings, Action::TogglePreviewLineNumbers, "l");
     let toggle_wrap = key_display(bindings, Action::TogglePreviewWrap, "w");
+    let scroll_left = key_display(bindings, Action::PreviewScrollLeft, "Shift+Left");
+    let scroll_right = key_display(bindings, Action::PreviewScrollRight, "Shift+Right");
     let esc = key_display(bindings, Action::ExitFullscreenPreview, "Esc");
     let help = key_display(bindings, Action::ToggleHelp, "?");
+    let refresh = key_display(bindings, Action::Refresh, "F5");
 
     format!(
-        "Shortcuts\n\nNavigation\n  {up}/{down}: move selection\n  {expand}: enter directory\n  {collapse}: parent directory\n  {open}: open (directory/fullscreen)\n\nPanels\n  {focus}: switch tree/preview focus\n  {narrower}/{wider}: resize preview panel\n\nPreview\n  {scroll_up}/{scroll_down}: scroll 3 lines\n  {page_up}/{page_down}: page up/down\n  {toggle_lines}: toggle line numbers\n  {toggle_wrap}: toggle wrap\n  {esc}: exit fullscreen\n\nOther\n  {hidden}: show/hide hidden files\n  {help}: close help\n  {quit}: quit fpv"
+        "Shortcuts\n\nNavigation\n  {up}/{down}: move selection\n  {expand}: enter directory\n  {collapse}: parent directory\n  {open}: open (directory/fullscreen)\n\nPanels\n  {focus}: switch tree/preview focus\n  {narrower}/{wider}: resize preview panel\n\nPreview\n  {scroll_up}/{scroll_down}: scroll 3 lines\n  {scroll_left}/{scroll_right}: scroll horizontally\n  {page_up}/{page_down}: page up/down\n  {toggle_lines}: toggle line numbers\n  {toggle_wrap}: toggle wrap\n  {esc}: exit fullscreen\n  Mouse drag: select text (copies on release)\n  Shift+Scroll: horizontal scroll\n\nOther\n  {hidden}: show/hide hidden files\n  {refresh}: refresh tree & preview\n  {help}: close help\n  {quit}: quit fpv\n\nAuto-refresh: tree updates automatically on file changes"
     )
 }
 

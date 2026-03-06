@@ -269,7 +269,7 @@ fn preview_render_clears_previous_content_when_switching_documents() {
                 frame,
                 frame.size(),
                 &long_doc,
-                &state,
+                &mut state,
                 &fpv::config::load::ThemeProfile::default(),
             )
         })
@@ -280,7 +280,7 @@ fn preview_render_clears_previous_content_when_switching_documents() {
                 frame,
                 frame.size(),
                 &short_doc,
-                &state,
+                &mut state,
                 &fpv::config::load::ThemeProfile::default(),
             )
         })

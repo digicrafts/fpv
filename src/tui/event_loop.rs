@@ -25,26 +25,29 @@ fn apply_mouse_resize(state: &mut SessionState, mouse: MouseEvent) -> bool {
     let width = main_area_width();
     let divider = state.divider_column(width);
     let near_divider = mouse.column.abs_diff(divider) <= 1;
-    let before = state.preview_width_cols;
 
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) if near_divider => {
             state.divider_drag_active = true;
-            state.set_preview_width_from_divider(mouse.column, width);
-            state.preview_width_cols != before
+            state.divider_drag_column = Some(state.clamped_divider_column(mouse.column, width));
+            false
         }
         MouseEventKind::Drag(MouseButton::Left) if state.divider_drag_active => {
-            state.set_preview_width_from_divider(mouse.column, width);
-            state.preview_width_cols != before
+            state.divider_drag_column = Some(state.clamped_divider_column(mouse.column, width));
+            false
         }
         MouseEventKind::Moved if state.divider_drag_active => {
-            state.set_preview_width_from_divider(mouse.column, width);
-            state.preview_width_cols != before
+            state.divider_drag_column = Some(state.clamped_divider_column(mouse.column, width));
+            false
         }
         MouseEventKind::Up(MouseButton::Left) if state.divider_drag_active => {
+            let target = state
+                .divider_drag_column
+                .unwrap_or_else(|| state.clamped_divider_column(mouse.column, width));
             state.divider_drag_active = false;
-            state.set_preview_width_from_divider(mouse.column, width);
-            state.preview_width_cols != before
+            state.divider_drag_column = None;
+            state.set_preview_width_from_divider(target, width);
+            false
         }
         _ => false,
     }
@@ -759,7 +762,9 @@ pub fn process_once(
 
 #[cfg(test)]
 mod tests {
-    use super::{preview_scrollbar_target_row, tree_index_for_click, tree_panel_area};
+    use super::{
+        apply_mouse_resize, preview_scrollbar_target_row, tree_index_for_click, tree_panel_area,
+    };
     use crate::app::state::{PreviewRenderCache, PreviewRenderCacheKey, SessionState};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::text::Line;
@@ -836,5 +841,51 @@ mod tests {
         });
 
         assert_eq!(super::rendered_preview_total_lines(&state, 10), 25);
+    }
+
+    #[test]
+    fn mouse_divider_drag_defers_resize_until_release() {
+        let mut state = SessionState::new(PathBuf::from("."));
+        state.preview_width_cols = 40;
+        let width = super::main_area_width();
+        let divider = state.divider_column(width);
+
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: divider,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        apply_mouse_resize(&mut state, down);
+        assert!(state.divider_drag_active);
+        assert_eq!(state.preview_width_cols, 40);
+        assert_eq!(state.divider_drag_column, Some(divider));
+
+        let drag = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: divider.saturating_sub(5),
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        apply_mouse_resize(&mut state, drag);
+        assert_eq!(state.preview_width_cols, 40);
+        assert_eq!(state.divider_drag_column, Some(divider.saturating_sub(5)));
+
+        let up = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: divider.saturating_sub(5),
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        apply_mouse_resize(&mut state, up);
+        assert!(!state.divider_drag_active);
+        assert_eq!(state.divider_drag_column, None);
+        assert_eq!(
+            state.panel_widths(width),
+            (
+                divider.saturating_sub(5),
+                width.saturating_sub(divider.saturating_sub(5))
+            )
+        );
     }
 }

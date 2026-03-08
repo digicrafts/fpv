@@ -3,6 +3,7 @@ use crate::fs::git::GitRepoStatus;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use std::path::PathBuf;
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeType {
@@ -125,6 +126,8 @@ pub struct PreviewDocument {
     pub source_path: PathBuf,
     pub load_state: LoadState,
     pub content_type: ContentType,
+    pub image_preview: bool,
+    pub image_preview_pending: bool,
     pub language_id: Option<String>,
     pub content_excerpt: String,
     pub styled_lines: Vec<StyledPreviewLine>,
@@ -141,6 +144,8 @@ impl Default for PreviewDocument {
             source_path: PathBuf::new(),
             load_state: LoadState::Idle,
             content_type: ContentType::PlainText,
+            image_preview: false,
+            image_preview_pending: false,
             language_id: None,
             content_excerpt: String::new(),
             styled_lines: Vec::new(),
@@ -207,6 +212,7 @@ pub struct SessionState {
     pub current_path: PathBuf,
     pub selected_index: usize,
     pub selected_path: PathBuf,
+    pub selected_changed_at: Instant,
     pub focus_pane: FocusPane,
     pub status_message: String,
     pub last_preview_latency_ms: u128,
@@ -223,6 +229,7 @@ pub struct SessionState {
     pub preview_wrap_enabled: bool,
     pub preview_fullscreen: bool,
     pub divider_drag_active: bool,
+    pub divider_drag_column: Option<u16>,
     pub preview_scroll_col: usize,
     pub preview_selection: Option<PreviewSelection>,
     pub preview_selecting: bool,
@@ -250,6 +257,7 @@ impl SessionState {
             current_path: root_path.clone(),
             selected_index: 0,
             selected_path: root_path,
+            selected_changed_at: Instant::now(),
             focus_pane: FocusPane::Tree,
             status_message: String::new(),
             last_preview_latency_ms: 0,
@@ -266,6 +274,7 @@ impl SessionState {
             preview_wrap_enabled: false,
             preview_fullscreen: false,
             divider_drag_active: false,
+            divider_drag_column: None,
             preview_scroll_col: 0,
             preview_selection: None,
             preview_selecting: false,
@@ -357,6 +366,13 @@ impl SessionState {
         self.preview_width_cols = self.clamped_preview_width(main_width, desired_preview);
     }
 
+    pub fn clamped_divider_column(&self, divider_col: u16, main_width: u16) -> u16 {
+        let tree = divider_col.min(main_width);
+        let desired_preview = main_width.saturating_sub(tree);
+        let preview = self.clamped_preview_width(main_width, desired_preview);
+        main_width.saturating_sub(preview)
+    }
+
     pub fn divider_column(&self, main_width: u16) -> u16 {
         let (tree, _) = self.panel_widths(main_width);
         tree
@@ -416,10 +432,18 @@ impl SessionState {
     }
 
     pub fn update_selected_path(&mut self, nodes: &[TreeNode]) {
-        self.selected_path = nodes
+        let next = nodes
             .get(self.selected_index)
             .map(|n| n.path.clone())
             .unwrap_or_else(|| self.current_path.clone());
+        self.set_selected_path(next);
+    }
+
+    pub fn set_selected_path(&mut self, path: PathBuf) {
+        if self.selected_path != path {
+            self.selected_path = path;
+            self.selected_changed_at = Instant::now();
+        }
     }
 }
 

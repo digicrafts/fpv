@@ -6,16 +6,17 @@ use crate::fs::current_dir::{list_current_directory_with_visibility, selected_en
 use crate::fs::git::{
     git_head_content_for_file, git_repo_status_for_path, GitFileStatus, GitRepoStatus,
 };
-use crate::fs::preview::load_preview;
+use crate::fs::preview::{is_supported_image_path, load_preview};
 use crate::highlight::render::render_with_highlight;
 use crate::highlight::syntax::HighlightContext;
 use ratatui::style::{Color, Modifier};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 2000;
+pub const IMAGE_PREVIEW_DELAY: Duration = Duration::from_secs(1);
 
 fn directory_entry_label(node: &TreeNode) -> String {
     match node.node_type {
@@ -280,6 +281,8 @@ fn diff_preview(
         source_path: path.to_path_buf(),
         load_state: LoadState::Ready,
         content_type: ContentType::Highlighted,
+        image_preview: false,
+        image_preview_pending: false,
         language_id: current_doc.language_id.clone(),
         content_excerpt: styled_lines_to_text_lines(&merged_lines).join("\n"),
         styled_lines: merged_lines,
@@ -296,6 +299,18 @@ fn diff_preview(
     merged_doc
 }
 
+fn pending_image_preview(path: &Path) -> PreviewDocument {
+    PreviewDocument {
+        source_path: path.to_path_buf(),
+        load_state: LoadState::Ready,
+        content_type: ContentType::PlainText,
+        image_preview: false,
+        image_preview_pending: true,
+        content_excerpt: "Loading image preview...".to_string(),
+        ..PreviewDocument::default()
+    }
+}
+
 pub fn refresh_preview(
     state: &mut SessionState,
     nodes: &[TreeNode],
@@ -304,11 +319,16 @@ pub fn refresh_preview(
 ) -> PreviewDocument {
     let started = Instant::now();
     let preview = if let Some(node) = nodes.get(state.selected_index) {
-        state.selected_path = node.path.clone();
+        state.set_selected_path(node.path.clone());
         state.selected_metadata = selected_entry_metadata(node);
         if node.node_type == NodeType::Directory {
             state.preview_diff_cache = None;
             directory_preview(&node.path, state.show_hidden)
+        } else if is_supported_image_path(&node.path)
+            && state.selected_changed_at.elapsed() < IMAGE_PREVIEW_DELAY
+        {
+            state.preview_diff_cache = None;
+            pending_image_preview(&node.path)
         } else if state.preview_diff_mode {
             diff_preview(&node.path, ctx, max_bytes, state)
         } else {

@@ -3,12 +3,14 @@ use crate::app::state::{
     PreviewRenderCache, PreviewRenderCacheKey, PreviewSelection, SessionState,
 };
 use crate::config::load::ThemeProfile;
+use crate::fs::preview::render_image_preview_for_width;
 use crate::tui::status_bar::compose_preview_metadata_line;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 
 pub fn preview_title_for_state(state: &SessionState) -> String {
@@ -50,6 +52,10 @@ fn plain_text_for_doc(doc: &PreviewDocument) -> String {
             content
         }
     }
+}
+
+fn has_styled_preview_content(doc: &PreviewDocument) -> bool {
+    !doc.styled_lines.is_empty()
 }
 
 fn line_number_width(total_lines: usize) -> usize {
@@ -179,14 +185,14 @@ fn line_number_separator(diff_marker: Option<DiffMarkerKind>) -> Span<'static> {
 }
 
 pub fn preview_total_lines(doc: &PreviewDocument) -> usize {
-    if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+    if has_styled_preview_content(doc) {
         return doc.styled_lines.len();
     }
     line_count(&plain_text_for_doc(doc))
 }
 
 pub fn preview_max_line_width(doc: &PreviewDocument) -> usize {
-    if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+    if has_styled_preview_content(doc) {
         doc.styled_lines
             .iter()
             .map(|line| {
@@ -207,18 +213,17 @@ pub fn preview_max_line_width(doc: &PreviewDocument) -> usize {
 
 pub fn extract_selected_text(doc: &PreviewDocument, selection: &PreviewSelection) -> String {
     let (start, end) = selection.ordered();
-    let lines: Vec<String> =
-        if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
-            doc.styled_lines
-                .iter()
-                .map(|line| line.iter().map(|seg| seg.text.as_str()).collect::<String>())
-                .collect()
-        } else {
-            plain_text_for_doc(doc)
-                .lines()
-                .map(|s| s.to_string())
-                .collect()
-        };
+    let lines: Vec<String> = if has_styled_preview_content(doc) {
+        doc.styled_lines
+            .iter()
+            .map(|line| line.iter().map(|seg| seg.text.as_str()).collect::<String>())
+            .collect()
+    } else {
+        plain_text_for_doc(doc)
+            .lines()
+            .map(|s| s.to_string())
+            .collect()
+    };
 
     if lines.is_empty() {
         return String::new();
@@ -335,12 +340,15 @@ fn render_border_label_top_left(
 fn is_unsupported_preview(doc: &PreviewDocument) -> bool {
     matches!(doc.content_type, ContentType::Unsupported)
         || matches!(doc.load_state, LoadState::Binary)
-        || doc.fallback_reason.is_some()
-        || (matches!(doc.content_type, ContentType::PlainText) && doc.language_id.is_none())
+        || matches!(doc.load_state, LoadState::Error)
 }
 
 fn line_numbers_enabled(state: &SessionState, doc: &PreviewDocument) -> bool {
-    state.preview_show_line_numbers && !is_unsupported_preview(doc)
+    state.preview_show_line_numbers
+        && doc.source_path.is_file()
+        && !doc.image_preview
+        && !doc.image_preview_pending
+        && !is_unsupported_preview(doc)
 }
 
 fn render_scroll_indicator(
@@ -552,9 +560,18 @@ fn build_preview_render_cache(
 ) -> PreviewRenderCache {
     let text = plain_text_for_doc(doc);
     let show_diff_markers = diff_mode && doc.line_changes.iter().any(|c| c.is_some());
+    let render_styled_lines: Cow<'_, [crate::app::state::StyledPreviewLine]> =
+        if doc.image_preview && !doc.image_preview_pending {
+            match render_image_preview_for_width(&doc.source_path, inner_width.max(1)) {
+                Some((_, lines)) => Cow::Owned(lines),
+                None => Cow::Borrowed(&doc.styled_lines),
+            }
+        } else {
+            Cow::Borrowed(&doc.styled_lines)
+        };
 
     let (rendered_lines, rendered_row_changes, line_number_cols) = if show_line_numbers {
-        if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+        if has_styled_preview_content(doc) {
             let line_number_cols = displayed_line_number_width(doc);
             let content_width = inner_width
                 .saturating_sub((line_number_cols + 3) as u16)
@@ -562,7 +579,7 @@ fn build_preview_render_cache(
             let mut lines = Vec::new();
             let mut row_changes = Vec::new();
 
-            for (index, styled_line) in doc.styled_lines.iter().enumerate() {
+            for (index, styled_line) in render_styled_lines.iter().enumerate() {
                 let line_number = displayed_line_number(doc, index);
                 let content_spans = styled_line
                     .iter()
@@ -627,13 +644,13 @@ fn build_preview_render_cache(
             }
             (lines, row_changes, line_number_cols + 3)
         }
-    } else if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+    } else if has_styled_preview_content(doc) {
         let line_number_cols = if show_diff_markers { 2 } else { 0 };
         let content_width = inner_width.max(1) as usize;
         let mut lines = Vec::new();
         let mut row_changes = Vec::new();
 
-        for (index, styled_line) in doc.styled_lines.iter().enumerate() {
+        for (index, styled_line) in render_styled_lines.iter().enumerate() {
             let content_spans: Vec<Span<'_>> = styled_line
                 .iter()
                 .map(|segment| Span::styled(segment.text.clone(), segment.style))

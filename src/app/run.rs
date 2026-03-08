@@ -1,4 +1,4 @@
-use crate::app::preview_controller::refresh_preview;
+use crate::app::preview_controller::{refresh_preview, IMAGE_PREVIEW_DELAY};
 use crate::app::state::SessionState;
 use crate::config::keymap::{default_keymap, UserKeymap};
 use crate::config::load::{
@@ -23,6 +23,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Terminal;
 use std::env;
@@ -101,6 +102,19 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn draw_preview_resize_placeholder(frame: &mut ratatui::Frame<'_>, area: Rect, divider_col: u16) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let x = divider_col.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
+    let buf = frame.buffer_mut();
+    for y in area.y..area.y.saturating_add(area.height) {
+        let cell = buf.get_mut(x, y);
+        cell.set_symbol("│");
+        cell.set_style(Style::default().fg(Color::Gray));
+    }
+}
+
 pub fn run() -> Result<()> {
     let (root, cfg_path) = parse_args();
     let mut state = SessionState::new(root);
@@ -135,6 +149,12 @@ pub fn run() -> Result<()> {
     let mut last_dir_mtime = dir_mtime(&state.current_path);
 
     loop {
+        if preview.image_preview_pending
+            && state.selected_changed_at.elapsed() >= IMAGE_PREVIEW_DELAY
+        {
+            preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
+        }
+
         // Auto-refresh: check if directory mtime changed
         if last_auto_refresh.elapsed() >= auto_refresh_interval {
             last_auto_refresh = Instant::now();
@@ -191,6 +211,11 @@ pub fn run() -> Result<()> {
                     .split(chunks[1]);
                 draw_tree(f, main[0], &nodes, &state, &theme);
                 draw_preview(f, main[1], &preview, &mut state, &theme);
+                if state.divider_drag_active {
+                    if let Some(divider_col) = state.divider_drag_column {
+                        draw_preview_resize_placeholder(f, chunks[1], divider_col);
+                    }
+                }
             }
             draw_status(f, chunks[2], &state, &bindings);
 

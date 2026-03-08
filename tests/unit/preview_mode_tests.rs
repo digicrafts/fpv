@@ -1,9 +1,9 @@
-use fpv::app::preview_controller::refresh_preview;
+use fpv::app::preview_controller::{refresh_preview, IMAGE_PREVIEW_DELAY};
 use fpv::app::state::{
     ContentType, LoadState, NodeType, PreviewFallbackReason, SelectedEntryMetadata, SessionState,
     StyledPreviewSegment, TreeNode,
 };
-use fpv::fs::preview::load_preview;
+use fpv::fs::preview::{load_preview, render_image_preview_for_width};
 use fpv::highlight::syntax::HighlightContext;
 use fpv::tui::preview_pane::{draw_preview, preview_total_lines};
 use fpv::tui::status_bar::compose_preview_metadata_line;
@@ -13,7 +13,54 @@ use ratatui::Terminal;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
+
+fn write_test_png(path: &std::path::Path) {
+    let mut image = image::RgbaImage::new(4, 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            let value = ((x + y) * 32) as u8;
+            image.put_pixel(x, y, image::Rgba([value, value, value, 255]));
+        }
+    }
+    image.save(path).expect("write png");
+}
+
+fn write_test_jpeg(path: &std::path::Path) {
+    let mut image = image::RgbImage::new(4, 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            let red = (x * 48) as u8;
+            let green = (y * 48) as u8;
+            image.put_pixel(x, y, image::Rgb([red, green, 32]));
+        }
+    }
+    image.save(path).expect("write jpeg");
+}
+
+fn write_test_gif(path: &std::path::Path) {
+    let mut image = image::RgbaImage::new(3, 3);
+    for y in 0..3 {
+        for x in 0..3 {
+            let value = if (x + y) % 2 == 0 { 16 } else { 224 };
+            image.put_pixel(x, y, image::Rgba([value, value, value, 255]));
+        }
+    }
+    image.save(path).expect("write gif");
+}
+
+fn write_tall_png(path: &std::path::Path) {
+    let mut image = image::RgbaImage::new(40, 120);
+    for y in 0..120 {
+        for x in 0..40 {
+            let red = ((x * 255) / 39) as u8;
+            let blue = ((y * 255) / 119) as u8;
+            image.put_pixel(x, y, image::Rgba([red, 48, blue, 255]));
+        }
+    }
+    image.save(path).expect("write tall png");
+}
 
 fn has_non_default_style(doc: &fpv::app::state::PreviewDocument) -> bool {
     doc.styled_lines
@@ -64,6 +111,8 @@ fn preview_selects_highlight_for_requested_common_file_types() {
             "<!doctype html><html><body>hi</body></html>\n",
         ),
         ("data.json", "{\"a\": 1, \"b\": true}\n"),
+        ("config.yaml", "name: fpv\nenabled: true\n"),
+        ("config.yml", "theme:\n  accent: blue\n"),
         ("main.go", "package main\nfunc main() {}\n"),
         ("main.c", "int main(void) { return 0; }\n"),
     ];
@@ -177,6 +226,38 @@ fn preview_falls_back_plain_text_for_unknown_extension() {
 }
 
 #[test]
+fn plain_text_file_preview_still_shows_line_numbers() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("notes.xyz");
+    fs::write(&p, "alpha\nbeta\n").expect("write file");
+    let ctx = HighlightContext::new();
+    let doc = load_preview(&p, 1024, &ctx);
+
+    let mut state = SessionState::new(PathBuf::from("."));
+    state.selected_metadata.filename = "notes.xyz".to_string();
+
+    let backend = TestBackend::new(24, 8);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_preview(
+                frame,
+                frame.size(),
+                &doc,
+                &mut state,
+                &fpv::config::load::ThemeProfile::default(),
+            )
+        })
+        .expect("draw plain text");
+
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer.get(1, 1).symbol(), " ");
+    assert_eq!(buffer.get(3, 1).symbol(), "1");
+    assert_eq!(buffer.get(1, 2).symbol(), " ");
+    assert_eq!(buffer.get(3, 2).symbol(), "2");
+}
+
+#[test]
 fn preview_marks_binary_files() {
     let d = tempdir().expect("create tempdir");
     let p = d.path().join("blob.bin");
@@ -184,6 +265,162 @@ fn preview_marks_binary_files() {
     let ctx = HighlightContext::new();
     let doc = load_preview(&p, 1024, &ctx);
     assert_eq!(doc.load_state, LoadState::Binary);
+}
+
+#[test]
+fn preview_renders_png_as_ascii_text() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("sample.png");
+    write_test_png(&p);
+    let ctx = HighlightContext::new();
+
+    let doc = load_preview(&p, 1024, &ctx);
+
+    assert_eq!(doc.load_state, LoadState::Ready);
+    assert_eq!(doc.content_type, ContentType::PlainText);
+    assert!(doc.image_preview);
+    assert!(!doc.image_preview_pending);
+    assert!(doc.fallback_reason.is_none());
+    assert!(!doc.content_excerpt.is_empty());
+    assert!(!doc
+        .content_excerpt
+        .contains("Binary file preview is not supported."));
+    assert!(!doc.styled_lines.is_empty());
+    assert!(has_non_default_style(&doc));
+    assert!(doc
+        .content_excerpt
+        .chars()
+        .all(|ch| ch == '\n' || "░▒▓█".contains(ch)));
+    assert!(doc
+        .styled_lines
+        .iter()
+        .flat_map(|line| line.iter())
+        .any(|segment| matches!(segment.style.fg, Some(Color::Rgb(_, _, _)))));
+}
+
+#[test]
+fn preview_renders_jpeg_and_gif_as_ascii_text() {
+    let d = tempdir().expect("create tempdir");
+    let jpg = d.path().join("sample.jpg");
+    let gif = d.path().join("sample.gif");
+    write_test_jpeg(&jpg);
+    write_test_gif(&gif);
+    let ctx = HighlightContext::new();
+
+    let jpg_doc = load_preview(&jpg, 1024, &ctx);
+    let gif_doc = load_preview(&gif, 1024, &ctx);
+
+    for doc in [jpg_doc, gif_doc] {
+        assert_eq!(doc.load_state, LoadState::Ready);
+        assert_eq!(doc.content_type, ContentType::PlainText);
+        assert!(doc.image_preview);
+        assert!(!doc.image_preview_pending);
+        assert!(doc.fallback_reason.is_none());
+        assert!(!doc.content_excerpt.trim().is_empty());
+        assert!(has_non_default_style(&doc));
+    }
+}
+
+#[test]
+fn image_preview_does_not_show_line_numbers() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("sample.png");
+    write_test_png(&p);
+    let ctx = HighlightContext::new();
+    let doc = load_preview(&p, 1024, &ctx);
+
+    let mut state = SessionState::new(PathBuf::from("."));
+    state.selected_metadata.filename = "sample.png".to_string();
+
+    let backend = TestBackend::new(24, 8);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_preview(
+                frame,
+                frame.size(),
+                &doc,
+                &mut state,
+                &fpv::config::load::ThemeProfile::default(),
+            )
+        })
+        .expect("draw image preview");
+
+    let buffer = terminal.backend().buffer();
+    assert!(buffer
+        .get(1, 1)
+        .symbol()
+        .chars()
+        .all(|ch| "░▒▓█".contains(ch)));
+    assert_ne!(buffer.get(3, 1).symbol(), "1");
+}
+
+#[test]
+fn image_preview_scales_to_requested_preview_width() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("sample.png");
+    write_test_png(&p);
+
+    let (_, narrow_lines) = render_image_preview_for_width(&p, 8).expect("narrow image preview");
+    let (_, wide_lines) = render_image_preview_for_width(&p, 20).expect("wide image preview");
+
+    let narrow_width = narrow_lines[0]
+        .iter()
+        .map(|segment| segment.text.chars().count())
+        .sum::<usize>();
+    let wide_width = wide_lines[0]
+        .iter()
+        .map(|segment| segment.text.chars().count())
+        .sum::<usize>();
+
+    assert_eq!(narrow_width, 8);
+    assert_eq!(wide_width, 20);
+    assert!(wide_lines.len() > narrow_lines.len());
+}
+
+#[test]
+fn image_preview_respects_60_by_30_bounds() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("tall.png");
+    write_tall_png(&p);
+
+    let (_, lines) = render_image_preview_for_width(&p, 200).expect("bounded image preview");
+    let rendered_width = lines[0]
+        .iter()
+        .map(|segment| segment.text.chars().count())
+        .sum::<usize>();
+
+    assert!(rendered_width <= 60);
+    assert!(lines.len() <= 30);
+}
+
+#[test]
+fn image_preview_waits_before_rendering_after_selection() {
+    let d = tempdir().expect("create tempdir");
+    let p = d.path().join("sample.png");
+    write_test_png(&p);
+    let nodes = vec![TreeNode {
+        path: p.clone(),
+        name: "sample.png".to_string(),
+        node_type: NodeType::File,
+        depth: 0,
+        expanded: false,
+        readable: true,
+        children_loaded: false,
+    }];
+    let ctx = HighlightContext::new();
+    let mut state = SessionState::new(d.path().to_path_buf());
+
+    let pending = refresh_preview(&mut state, &nodes, &ctx, 1024);
+    assert!(pending.image_preview_pending);
+    assert!(!pending.image_preview);
+    assert!(pending.content_excerpt.contains("Loading image preview"));
+
+    state.selected_changed_at = Instant::now() - IMAGE_PREVIEW_DELAY - Duration::from_millis(100);
+    let ready = refresh_preview(&mut state, &nodes, &ctx, 1024);
+    assert!(!ready.image_preview_pending);
+    assert!(ready.image_preview);
+    assert!(!ready.content_excerpt.is_empty());
 }
 
 #[test]
@@ -381,11 +618,16 @@ fn unsupported_preview_expands_tabs_for_terminal_stability() {
 
 #[test]
 fn diff_preview_renders_markers_and_line_emphasis() {
+    let d = tempdir().expect("create tempdir");
+    let file_path = d.path().join("main.rs");
+    fs::write(&file_path, "fn main() {}\n").expect("write file");
+
     let mut state = SessionState::new(PathBuf::from("."));
     state.preview_diff_mode = true;
     state.selected_metadata.filename = "main.rs".to_string();
 
     let doc = fpv::app::state::PreviewDocument {
+        source_path: file_path,
         load_state: LoadState::Ready,
         content_type: ContentType::Highlighted,
         styled_lines: vec![

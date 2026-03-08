@@ -3,6 +3,27 @@ use tree_sitter::Language;
 use tree_sitter_highlight::HighlightConfiguration;
 
 const EMPTY_QUERY: &str = "";
+const YAML_HIGHLIGHTS_QUERY: &str = r#"
+ (comment) @comment
+ (escape_sequence) @escape
+ (double_quote_scalar) @string
+ (single_quote_scalar) @string
+ (block_scalar) @string
+ (string_scalar) @string
+ (boolean_scalar) @constant.builtin
+ (null_scalar) @constant.builtin
+ (integer_scalar) @number
+ (float_scalar) @number
+ (tag) @type
+ (anchor) @type
+ (alias) @variable
+ (yaml_directive) @keyword
+ (tag_directive) @keyword
+ (reserved_directive) @keyword
+ (block_mapping_pair key: (_) @property)
+ (flow_pair key: (_) @property)
+ [":" "?" "," "[" "]" "{" "}" "-" "---" "..."] @punctuation.special
+"#;
 pub const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
     "comment",
@@ -58,6 +79,7 @@ enum HighlightLanguage {
     Toml,
     TypeScript,
     Tsx,
+    Yaml,
 }
 
 struct LanguageSpec {
@@ -91,6 +113,7 @@ pub struct HighlightContext {
     toml_config: Option<HighlightConfiguration>,
     ts_config: Option<HighlightConfiguration>,
     tsx_config: Option<HighlightConfiguration>,
+    yaml_config: Option<HighlightConfiguration>,
 }
 
 impl HighlightLanguage {
@@ -110,6 +133,7 @@ impl HighlightLanguage {
             Self::Rust => "Rust",
             Self::Toml => "TOML",
             Self::TypeScript | Self::Tsx => "TypeScript",
+            Self::Yaml => "YAML",
         }
     }
 
@@ -231,6 +255,13 @@ impl HighlightLanguage {
                 injections_query: EMPTY_QUERY,
                 locals_query: tree_sitter_typescript::LOCALS_QUERY,
             },
+            Self::Yaml => LanguageSpec {
+                language_id: self.language_id(),
+                language: tree_sitter_yaml::language(),
+                highlights_query: YAML_HIGHLIGHTS_QUERY.to_string(),
+                injections_query: EMPTY_QUERY,
+                locals_query: EMPTY_QUERY,
+            },
         }
     }
 
@@ -253,6 +284,7 @@ impl HighlightLanguage {
             "toml" => Some(Self::Toml),
             "ts" => Some(Self::TypeScript),
             "tsx" => Some(Self::Tsx),
+            "yaml" | "yml" => Some(Self::Yaml),
             _ => None,
         }
     }
@@ -303,6 +335,7 @@ impl HighlightContext {
             toml_config: build_config(HighlightLanguage::Toml),
             ts_config: build_config(HighlightLanguage::TypeScript),
             tsx_config: build_config(HighlightLanguage::Tsx),
+            yaml_config: build_config(HighlightLanguage::Yaml),
         }
     }
 
@@ -326,6 +359,7 @@ impl HighlightContext {
             HighlightLanguage::Toml => self.toml_config.as_ref()?,
             HighlightLanguage::TypeScript => self.ts_config.as_ref()?,
             HighlightLanguage::Tsx => self.tsx_config.as_ref()?,
+            HighlightLanguage::Yaml => self.yaml_config.as_ref()?,
         };
         Some(HighlightTarget {
             language_id: spec.language_id,
@@ -351,6 +385,7 @@ impl HighlightContext {
             "toml" => self.toml_config.as_ref(),
             "typescript" | "ts" => self.ts_config.as_ref(),
             "tsx" => self.tsx_config.as_ref(),
+            "yaml" | "yml" => self.yaml_config.as_ref(),
             _ => None,
         }
     }

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.6] - 2026-03-08
+
+### Added
+
+- **Image preview mode** — common image formats such as PNG, JPEG, and GIF now render directly in the preview pane as colorized shaded-block terminal previews.
+- **YAML syntax highlighting** — `.yaml` and `.yml` files now use syntax highlighting in the normal preview pipeline.
+
+### Changed
+
+- **Image preview sizing** — image previews now scale to the current preview pane while staying within a `60x30` character bound.
+- **Image preview debounce** — image rendering is delayed by 1 second after selection to avoid expensive decode work while quickly moving through the tree.
+- **Mouse divider resize UX** — dragging the tree/preview divider now shows a placeholder guide and applies the actual resize on mouse release.
+
 ## [0.1.5] - 2026-03-08
 
 ### Added

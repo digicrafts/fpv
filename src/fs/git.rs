@@ -193,6 +193,74 @@ fn parse_branch_name(head_line: &str) -> Option<String> {
     }
 }
 
+pub fn git_diff_for_file(file_path: &Path) -> Option<String> {
+    let repo_root = git_repo_root(file_path.parent().unwrap_or(file_path))?;
+
+    // Try staged diff first, then unstaged
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .args(["diff", "HEAD", "--"])
+        .arg(file_path)
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+
+    // For untracked files, diff against /dev/null
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .args(["diff", "--no-index", "--", "/dev/null"])
+        .arg(file_path)
+        .output()
+        .ok()?;
+
+    // git diff --no-index returns exit code 1 when files differ
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !text.trim().is_empty() {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+pub fn git_head_content_for_file(file_path: &Path) -> Option<String> {
+    let repo_root = git_repo_root(file_path.parent().unwrap_or(file_path))?;
+    let rel_path = file_path.strip_prefix(&repo_root).ok()?;
+
+    let exists_in_head = Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .args(["cat-file", "-e"])
+        .arg(format!("HEAD:{}", rel_path.display()))
+        .output()
+        .ok()?;
+
+    if !exists_in_head.status.success() {
+        return Some(String::new());
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .args(["show"])
+        .arg(format!("HEAD:{}", rel_path.display()))
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 fn is_conflict_state(x: char, y: char) -> bool {
     matches!((x, y), ('U', _) | (_, 'U') | ('A', 'A') | ('D', 'D'))
 }

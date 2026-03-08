@@ -1,8 +1,15 @@
-use crate::app::state::{LoadState, NodeType, PreviewDocument, SessionState, TreeNode};
+use crate::app::state::{
+    ContentType, LoadState, NodeType, PreviewDocument, PreviewLineChange, SessionState,
+    StyledPreviewLine, StyledPreviewSegment, TreeNode,
+};
 use crate::fs::current_dir::{list_current_directory_with_visibility, selected_entry_metadata};
-use crate::fs::git::{git_repo_status_for_path, GitFileStatus, GitRepoStatus};
+use crate::fs::git::{
+    git_head_content_for_file, git_repo_status_for_path, GitFileStatus, GitRepoStatus,
+};
 use crate::fs::preview::load_preview;
+use crate::highlight::render::render_with_highlight;
 use crate::highlight::syntax::HighlightContext;
+use ratatui::style::{Color, Modifier};
 use std::path::Path;
 use std::time::Instant;
 
@@ -102,6 +109,153 @@ fn directory_preview(path: &Path, show_hidden: bool) -> PreviewDocument {
     }
 }
 
+fn styled_lines_to_text_lines(lines: &[StyledPreviewLine]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.iter().map(|segment| segment.text.as_str()).collect())
+        .collect()
+}
+
+fn plain_text_to_styled_lines(text: &str) -> Vec<StyledPreviewLine> {
+    text.split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                Vec::new()
+            } else {
+                vec![StyledPreviewSegment {
+                    text: line.to_string(),
+                    style: Default::default(),
+                }]
+            }
+        })
+        .collect()
+}
+
+fn display_styled_lines(doc: &PreviewDocument) -> Vec<StyledPreviewLine> {
+    if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
+        doc.styled_lines.clone()
+    } else {
+        plain_text_to_styled_lines(&doc.content_excerpt)
+    }
+}
+
+fn apply_modifier_to_line(
+    line: &StyledPreviewLine,
+    change: PreviewLineChange,
+) -> StyledPreviewLine {
+    line.iter()
+        .map(|segment| {
+            let style = match change {
+                PreviewLineChange::Added => segment
+                    .style
+                    .bg(Color::Rgb(0, 70, 0))
+                    .add_modifier(Modifier::BOLD),
+                PreviewLineChange::Deleted => segment
+                    .style
+                    .bg(Color::Rgb(90, 0, 0))
+                    .add_modifier(Modifier::DIM),
+            };
+            StyledPreviewSegment {
+                text: segment.text.clone(),
+                style,
+            }
+        })
+        .collect()
+}
+
+fn lcs_table(left: &[String], right: &[String]) -> Vec<Vec<usize>> {
+    let mut table = vec![vec![0; right.len() + 1]; left.len() + 1];
+    for i in (0..left.len()).rev() {
+        for j in (0..right.len()).rev() {
+            table[i][j] = if left[i] == right[j] {
+                table[i + 1][j + 1] + 1
+            } else {
+                table[i + 1][j].max(table[i][j + 1])
+            };
+        }
+    }
+    table
+}
+
+fn diff_preview(path: &Path, ctx: &HighlightContext, max_bytes: usize) -> PreviewDocument {
+    let current_doc = load_preview(path, max_bytes, ctx);
+    if current_doc.load_state != LoadState::Ready {
+        return current_doc;
+    }
+
+    let Some(base_content) = git_head_content_for_file(path) else {
+        return current_doc;
+    };
+
+    let current_lines = display_styled_lines(&current_doc);
+    let current_text_lines = styled_lines_to_text_lines(&current_lines);
+    let base_rendered = render_with_highlight(ctx, path, &base_content);
+    let base_lines = if matches!(base_rendered.content_type, ContentType::Highlighted)
+        && !base_rendered.styled_lines.is_empty()
+    {
+        base_rendered.styled_lines
+    } else {
+        plain_text_to_styled_lines(&base_content)
+    };
+    let base_text_lines = styled_lines_to_text_lines(&base_lines);
+
+    if base_text_lines == current_text_lines {
+        return current_doc;
+    }
+
+    let table = lcs_table(&base_text_lines, &current_text_lines);
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut merged_lines = Vec::new();
+    let mut display_line_numbers = Vec::new();
+    let mut line_changes = Vec::new();
+
+    while i < base_lines.len() || j < current_lines.len() {
+        if i < base_lines.len()
+            && j < current_lines.len()
+            && base_text_lines[i] == current_text_lines[j]
+        {
+            merged_lines.push(current_lines[j].clone());
+            display_line_numbers.push(Some(j + 1));
+            line_changes.push(None);
+            i += 1;
+            j += 1;
+        } else if j < current_lines.len()
+            && (i == base_lines.len() || table[i][j + 1] > table[i + 1][j])
+        {
+            merged_lines.push(apply_modifier_to_line(
+                &current_lines[j],
+                PreviewLineChange::Added,
+            ));
+            display_line_numbers.push(Some(j + 1));
+            line_changes.push(Some(PreviewLineChange::Added));
+            j += 1;
+        } else if i < base_lines.len() {
+            merged_lines.push(apply_modifier_to_line(
+                &base_lines[i],
+                PreviewLineChange::Deleted,
+            ));
+            display_line_numbers.push(Some(i + 1));
+            line_changes.push(Some(PreviewLineChange::Deleted));
+            i += 1;
+        }
+    }
+
+    PreviewDocument {
+        source_path: path.to_path_buf(),
+        load_state: LoadState::Ready,
+        content_type: ContentType::Highlighted,
+        language_id: current_doc.language_id.clone(),
+        content_excerpt: styled_lines_to_text_lines(&merged_lines).join("\n"),
+        styled_lines: merged_lines,
+        display_line_numbers,
+        line_changes,
+        fallback_reason: None,
+        truncated: current_doc.truncated,
+        error_message: None,
+    }
+}
+
 pub fn refresh_preview(
     state: &mut SessionState,
     nodes: &[TreeNode],
@@ -114,6 +268,8 @@ pub fn refresh_preview(
         state.selected_metadata = selected_entry_metadata(node);
         if node.node_type == NodeType::Directory {
             directory_preview(&node.path, state.show_hidden)
+        } else if state.preview_diff_mode {
+            diff_preview(&node.path, ctx, max_bytes)
         } else {
             load_preview(&node.path, max_bytes, ctx)
         }

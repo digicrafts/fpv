@@ -31,9 +31,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 fn dir_mtime(path: &PathBuf) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn parse_args() -> (PathBuf, Option<PathBuf>) {

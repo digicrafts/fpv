@@ -39,6 +39,8 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
         language_id: None,
         content_excerpt: String::new(),
         styled_lines: Vec::new(),
+        display_line_numbers: Vec::new(),
+        line_changes: Vec::new(),
         fallback_reason: None,
         truncated: false,
         error_message: None,

@@ -310,19 +310,11 @@ pub fn process_once(
                 use crossterm::event::KeyCode;
                 match key.code {
                     KeyCode::Up => {
-                        state.scroll_preview_lines(
-                            -3,
-                            preview_total_lines,
-                            preview_viewport_rows,
-                        );
+                        state.scroll_preview_lines(-3, preview_total_lines, preview_viewport_rows);
                         return Ok((false, false, false));
                     }
                     KeyCode::Down => {
-                        state.scroll_preview_lines(
-                            3,
-                            preview_total_lines,
-                            preview_viewport_rows,
-                        );
+                        state.scroll_preview_lines(3, preview_total_lines, preview_viewport_rows);
                         return Ok((false, false, false));
                     }
                     KeyCode::Left if !state.preview_wrap_enabled => {
@@ -581,6 +573,14 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         should_refresh_tree = true;
+                        should_refresh_preview = true;
+                    }
+                    Action::ToggleDiffPreview => {
+                        if state.help_overlay_visible {
+                            return Ok((false, false, false));
+                        }
+                        state.preview_diff_mode = !state.preview_diff_mode;
+                        state.reset_preview_scroll();
                         should_refresh_preview = true;
                     }
                     Action::Quit => return Ok((true, false, false)),

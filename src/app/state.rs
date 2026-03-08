@@ -78,6 +78,12 @@ pub struct StyledPreviewSegment {
 
 pub type StyledPreviewLine = Vec<StyledPreviewSegment>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewLineChange {
+    Added,
+    Deleted,
+}
+
 #[derive(Debug, Clone)]
 pub struct PreviewDocument {
     pub source_path: PathBuf,
@@ -86,6 +92,8 @@ pub struct PreviewDocument {
     pub language_id: Option<String>,
     pub content_excerpt: String,
     pub styled_lines: Vec<StyledPreviewLine>,
+    pub display_line_numbers: Vec<Option<usize>>,
+    pub line_changes: Vec<Option<PreviewLineChange>>,
     pub fallback_reason: Option<PreviewFallbackReason>,
     pub truncated: bool,
     pub error_message: Option<String>,
@@ -100,6 +108,8 @@ impl Default for PreviewDocument {
             language_id: None,
             content_excerpt: String::new(),
             styled_lines: Vec::new(),
+            display_line_numbers: Vec::new(),
+            line_changes: Vec::new(),
             fallback_reason: None,
             truncated: false,
             error_message: None,
@@ -184,6 +194,7 @@ pub struct SessionState {
     pub preview_line_number_cols: usize,
     pub preview_copy_indicator: bool,
     pub preview_copying_indicator: bool,
+    pub preview_diff_mode: bool,
     pub help_overlay_visible: bool,
     pub status_display_mode: StatusDisplayMode,
     pub git_status: Option<GitRepoStatus>,
@@ -223,6 +234,7 @@ impl SessionState {
             preview_line_number_cols: 0,
             preview_copy_indicator: false,
             preview_copying_indicator: false,
+            preview_diff_mode: false,
             help_overlay_visible: false,
             status_display_mode: StatusDisplayMode::Bar,
             git_status: None,

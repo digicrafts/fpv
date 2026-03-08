@@ -58,9 +58,10 @@ pub fn compose_shortcut_help_text(bindings: &HashMap<Action, KeyEvent>) -> Strin
     let esc = key_display(bindings, Action::ExitFullscreenPreview, "Esc");
     let help = key_display(bindings, Action::ToggleHelp, "?");
     let refresh = key_display(bindings, Action::Refresh, "F5");
+    let diff = key_display(bindings, Action::ToggleDiffPreview, "d");
 
     format!(
-        "Shortcuts\n\nNavigation\n  {up}/{down}: move selection\n  {expand}: enter directory\n  {collapse}: parent directory\n  {open}: open (directory/fullscreen)\n\nPanels\n  {focus}: switch tree/preview focus\n  {narrower}/{wider}: resize preview panel\n\nPreview\n  {scroll_up}/{scroll_down}: scroll 3 lines\n  {scroll_left}/{scroll_right}: scroll horizontally\n  {page_up}/{page_down}: page up/down\n  {toggle_lines}: toggle line numbers\n  {toggle_wrap}: toggle wrap\n  {esc}: exit fullscreen\n  Mouse drag: select text (copies on release)\n  Shift+Scroll: horizontal scroll\n\nOther\n  {hidden}: show/hide hidden files\n  {refresh}: refresh tree & preview\n  {help}: close help\n  {quit}: quit fpv\n\nAuto-refresh: tree updates automatically on file changes"
+        "Shortcuts\n\nNavigation\n  {up}/{down}: move selection\n  {expand}: enter directory\n  {collapse}: parent directory\n  {open}: open (directory/fullscreen)\n\nPanels\n  {focus}: switch tree/preview focus\n  {narrower}/{wider}: resize preview panel\n\nPreview\n  {scroll_up}/{scroll_down}: scroll 3 lines\n  {scroll_left}/{scroll_right}: scroll horizontally\n  {page_up}/{page_down}: page up/down\n  {toggle_lines}: toggle line numbers\n  {toggle_wrap}: toggle wrap\n  {diff}: toggle git diff preview\n  {esc}: exit fullscreen\n  Mouse drag: select text (copies on release)\n  Shift+Scroll: horizontal scroll\n\nOther\n  {hidden}: show/hide hidden files\n  {refresh}: refresh tree & preview\n  {help}: close help\n  {quit}: quit fpv\n\nAuto-refresh: tree updates automatically on file changes"
     )
 }
 

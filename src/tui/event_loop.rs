@@ -117,6 +117,48 @@ fn mouse_to_content_position(state: &SessionState, mouse: MouseEvent) -> Content
     }
 }
 
+fn rendered_preview_total_lines(state: &SessionState, preview_total_lines: usize) -> usize {
+    state
+        .preview_render_cache
+        .as_ref()
+        .map(|cache| cache.total_lines)
+        .unwrap_or(preview_total_lines)
+}
+
+fn preview_scrollbar_target_row(
+    state: &SessionState,
+    mouse: MouseEvent,
+    total_lines: usize,
+) -> Option<usize> {
+    let (inner_x, inner_y, inner_width, inner_height) = state.preview_inner_rect;
+    if inner_width == 0 || inner_height == 0 || total_lines == 0 {
+        return None;
+    }
+
+    let scrollbar_x = inner_x + inner_width.saturating_sub(1);
+    if mouse.column != scrollbar_x
+        || mouse.row < inner_y
+        || mouse.row >= inner_y.saturating_add(inner_height)
+    {
+        return None;
+    }
+
+    let viewport_rows = inner_height as usize;
+    if total_lines <= viewport_rows {
+        return None;
+    }
+
+    let indicator_row = mouse.row.saturating_sub(inner_y) as usize;
+    let max_indicator_index = viewport_rows.saturating_sub(1);
+    let max_scroll = total_lines.saturating_sub(viewport_rows);
+    let target_row = if max_indicator_index == 0 {
+        0
+    } else {
+        indicator_row.saturating_mul(max_scroll) / max_indicator_index
+    };
+    Some(target_row.min(max_scroll))
+}
+
 fn preview_viewport_cols(state: &SessionState) -> usize {
     let (_, _, inner_w, _) = state.preview_inner_rect;
     (inner_w as usize).saturating_sub(state.preview_line_number_cols)
@@ -626,17 +668,28 @@ pub fn process_once(
                             }
                         }
 
-                        if !tree_clicked && in_preview_panel(state, mouse) {
-                            let pos = mouse_to_content_position(state, mouse);
-                            state.preview_selection = Some(PreviewSelection {
-                                anchor: pos,
-                                cursor: pos,
-                            });
-                            state.preview_selecting = true;
-                            state.preview_copying_indicator = true;
-                        } else if !tree_clicked {
-                            state.preview_selection = None;
-                            state.preview_selecting = false;
+                        let rendered_total_lines =
+                            rendered_preview_total_lines(state, preview_total_lines);
+                        if !tree_clicked {
+                            if let Some(target_row) =
+                                preview_scrollbar_target_row(state, mouse, rendered_total_lines)
+                            {
+                                state.preview_scroll_row = target_row;
+                                state.preview_selection = None;
+                                state.preview_selecting = false;
+                                state.preview_copying_indicator = false;
+                            } else if in_preview_panel(state, mouse) {
+                                let pos = mouse_to_content_position(state, mouse);
+                                state.preview_selection = Some(PreviewSelection {
+                                    anchor: pos,
+                                    cursor: pos,
+                                });
+                                state.preview_selecting = true;
+                                state.preview_copying_indicator = true;
+                            } else {
+                                state.preview_selection = None;
+                                state.preview_selecting = false;
+                            }
                         }
                     }
                     MouseEventKind::Drag(MouseButton::Left) if state.preview_selecting => {
@@ -706,9 +759,10 @@ pub fn process_once(
 
 #[cfg(test)]
 mod tests {
-    use super::{tree_index_for_click, tree_panel_area};
-    use crate::app::state::SessionState;
+    use super::{preview_scrollbar_target_row, tree_index_for_click, tree_panel_area};
+    use crate::app::state::{PreviewRenderCache, PreviewRenderCacheKey, SessionState};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::text::Line;
     use std::path::PathBuf;
 
     #[test]
@@ -730,5 +784,57 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         assert!(tree_index_for_click(&state, click_on_top_border, 10).is_none());
+    }
+
+    #[test]
+    fn preview_scrollbar_click_maps_to_rendered_row_position() {
+        let mut state = SessionState::new(PathBuf::from("."));
+        state.preview_inner_rect = (40, 2, 30, 10);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 69,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let target = preview_scrollbar_target_row(&state, click, 100);
+
+        assert_eq!(target, Some(50));
+    }
+
+    #[test]
+    fn preview_scrollbar_click_is_ignored_when_no_scrollbar_is_visible() {
+        let mut state = SessionState::new(PathBuf::from("."));
+        state.preview_inner_rect = (10, 3, 20, 8);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 29,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        assert_eq!(preview_scrollbar_target_row(&state, click, 8), None);
+    }
+
+    #[test]
+    fn rendered_preview_total_lines_prefers_render_cache() {
+        let mut state = SessionState::new(PathBuf::from("."));
+        state.preview_render_cache = Some(PreviewRenderCache {
+            key: PreviewRenderCacheKey {
+                epoch: 1,
+                inner_width: 40,
+                show_line_numbers: true,
+                wrap_enabled: true,
+                content_ptr: 0,
+                styled_lines_ptr: 0,
+                line_changes_ptr: 0,
+            },
+            rendered_lines: vec![Line::default(); 25],
+            rendered_row_changes: vec![None; 25],
+            total_lines: 25,
+            line_number_cols: 4,
+        });
+
+        assert_eq!(super::rendered_preview_total_lines(&state, 10), 25);
     }
 }

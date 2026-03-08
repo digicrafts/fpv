@@ -6,6 +6,8 @@
 
 A minimal, keyboard-first TUI file previewer for browsing directories and viewing code with syntax highlighting in the terminal.
 
+Current release: `v0.1.5`
+
 ---
 
 <img width="2282" height="1600" alt="image" src="https://github.com/user-attachments/assets/4c7e0485-0b64-41db-a745-e069aeb67416" />
@@ -16,6 +18,7 @@ A minimal, keyboard-first TUI file previewer for browsing directories and viewin
 - **Split TUI** — Directory tree on the left, file preview on the right
 - **Syntax highlighting** — Tree-sitter–powered highlighting for many languages (see [Supported file types](#supported-file-types))
 - **Git-aware** — Tree indicators for repository status
+- **Inline diff preview** — toggle git diff mode to see added and deleted lines inline in the highlighted preview, with change markers in the scrollbar
 - **Configurable** — Keybindings and theme via a TOML config file
 - **Safe defaults** — Plain-text or fallback preview for binary or unreadable files
 

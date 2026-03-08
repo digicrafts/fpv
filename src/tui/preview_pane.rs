@@ -1,6 +1,6 @@
 use crate::app::state::{
     ContentType, LoadState, PreviewDocument, PreviewFallbackReason, PreviewLineChange,
-    PreviewSelection, SessionState,
+    PreviewRenderCache, PreviewRenderCacheKey, PreviewSelection, SessionState,
 };
 use crate::config::load::ThemeProfile;
 use crate::tui::status_bar::compose_preview_metadata_line;
@@ -316,6 +316,22 @@ fn render_overlay_label(
     frame.render_widget(widget, area);
 }
 
+fn render_border_label_top_left(
+    frame: &mut Frame<'_>,
+    area: ratatui::layout::Rect,
+    label: &str,
+    style: Style,
+) {
+    let label_width = label.len() as u16;
+    if area.width <= 2 || area.height == 0 || label_width > area.width.saturating_sub(2) {
+        return;
+    }
+
+    let widget_area = ratatui::layout::Rect::new(area.x + 1, area.y, label_width, 1);
+    let widget = Paragraph::new(Span::styled(label, style));
+    frame.render_widget(widget, widget_area);
+}
+
 fn is_unsupported_preview(doc: &PreviewDocument) -> bool {
     matches!(doc.content_type, ContentType::Unsupported)
         || matches!(doc.load_state, LoadState::Binary)
@@ -526,47 +542,23 @@ fn numbered_lines_with_wrapped_content(
     lines
 }
 
-pub fn draw_preview(
-    frame: &mut Frame<'_>,
-    area: ratatui::layout::Rect,
+fn build_preview_render_cache(
     doc: &PreviewDocument,
-    state: &mut SessionState,
-    theme: &ThemeProfile,
-) {
-    frame.render_widget(Clear, area);
-    let title = preview_title_for_state(state);
-    let metadata_line =
-        preview_border_metadata_for_state(state, area.width.saturating_sub(2) as usize);
-    let block = Block::default()
-        .title(
-            Line::from(vec![Span::raw(" "), Span::raw(title), Span::raw(" ")])
-                .alignment(Alignment::Right),
-        )
-        .title_bottom(Line::from(metadata_line).alignment(Alignment::Right))
-        .borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    state.preview_inner_rect = (inner.x, inner.y, inner.width, inner.height);
-
+    epoch: u64,
+    inner_width: u16,
+    show_line_numbers: bool,
+    use_wrap: bool,
+    diff_mode: bool,
+) -> PreviewRenderCache {
     let text = plain_text_for_doc(doc);
-    let scroll_row_usize = state.preview_scroll_row;
-    let scroll_row = scroll_row_usize.min(u16::MAX as usize) as u16;
-    let scroll_col = if state.preview_wrap_enabled {
-        0u16
-    } else {
-        state.preview_scroll_col.min(u16::MAX as usize) as u16
-    };
-    let show_line_numbers = line_numbers_enabled(state, doc);
-    let use_wrap = state.preview_wrap_enabled;
-    let show_diff_markers = state.preview_diff_mode && doc.line_changes.iter().any(|c| c.is_some());
+    let show_diff_markers = diff_mode && doc.line_changes.iter().any(|c| c.is_some());
 
-    let (content_widget, rendered_total_lines, rendered_row_changes) = if show_line_numbers {
+    let (rendered_lines, rendered_row_changes, line_number_cols) = if show_line_numbers {
         if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
             let line_number_cols = displayed_line_number_width(doc);
-            let ln_cols = line_number_cols + 3;
-            state.preview_line_number_cols = ln_cols;
-            let content_width = inner.width.saturating_sub(ln_cols as u16).max(1) as usize;
+            let content_width = inner_width
+                .saturating_sub((line_number_cols + 3) as u16)
+                .max(1) as usize;
             let mut lines = Vec::new();
             let mut row_changes = Vec::new();
 
@@ -576,7 +568,7 @@ pub fn draw_preview(
                     .iter()
                     .map(|segment| Span::styled(segment.text.clone(), segment.style))
                     .collect::<Vec<_>>();
-                let diff_marker = if state.preview_diff_mode {
+                let diff_marker = if diff_mode {
                     diff_marker_kind(doc.line_changes.get(index).copied().flatten())
                 } else {
                     None
@@ -602,49 +594,42 @@ pub fn draw_preview(
                     row_changes.push(doc.line_changes.get(index).copied().flatten());
                 }
             }
-            let rendered_total = lines.len();
-            (
-                Paragraph::new(Text::from(lines)).scroll((scroll_row, scroll_col)),
-                rendered_total,
-                row_changes,
-            )
+            (lines, row_changes, line_number_cols + 3)
         } else {
             let rows = text.split('\n').collect::<Vec<_>>();
             let line_number_cols = displayed_line_number_width(doc);
-            let ln_cols = line_number_cols + 3;
-            state.preview_line_number_cols = ln_cols;
-            let content_width = inner.width.saturating_sub(ln_cols as u16).max(1) as usize;
+            let content_width = inner_width
+                .saturating_sub((line_number_cols + 3) as u16)
+                .max(1) as usize;
             let mut lines = Vec::new();
-            let row_changes = vec![None; rows.len()];
+            let mut row_changes = Vec::new();
 
             for (index, row) in rows.iter().enumerate() {
                 let line_number = displayed_line_number(doc, index);
                 let content_spans = vec![Span::raw((*row).to_string())];
                 if use_wrap {
-                    lines.extend(numbered_lines_with_wrapped_content(
+                    let wrapped = numbered_lines_with_wrapped_content(
                         line_number,
                         line_number_cols,
                         None,
                         content_spans,
                         content_width,
-                    ));
+                    );
+                    row_changes.extend(std::iter::repeat_n(None, wrapped.len()));
+                    lines.extend(wrapped);
                 } else {
                     let mut spans = line_number_prefix(line_number, line_number_cols, None);
                     spans.push(line_number_separator(None));
                     spans.push(Span::raw((*row).to_string()));
                     lines.push(Line::from(spans));
+                    row_changes.push(None);
                 }
             }
-            let rendered_total = lines.len();
-            (
-                Paragraph::new(Text::from(lines)).scroll((scroll_row, scroll_col)),
-                rendered_total,
-                row_changes,
-            )
+            (lines, row_changes, line_number_cols + 3)
         }
     } else if matches!(doc.content_type, ContentType::Highlighted) && !doc.styled_lines.is_empty() {
-        state.preview_line_number_cols = if show_diff_markers { 2 } else { 0 };
-        let content_width = inner.width.max(1) as usize;
+        let line_number_cols = if show_diff_markers { 2 } else { 0 };
+        let content_width = inner_width.max(1) as usize;
         let mut lines = Vec::new();
         let mut row_changes = Vec::new();
 
@@ -686,20 +671,11 @@ pub fn draw_preview(
                 row_changes.push(doc.line_changes.get(index).copied().flatten());
             }
         }
-        let rendered_total = lines.len();
-        (
-            Paragraph::new(Text::from(lines)).scroll((scroll_row, scroll_col)),
-            rendered_total,
-            row_changes,
-        )
+        (lines, row_changes, line_number_cols)
     } else if use_wrap {
-        state.preview_line_number_cols = if show_diff_markers { 2 } else { 0 };
+        let line_number_cols = if show_diff_markers { 2 } else { 0 };
         let rows = text.split('\n').collect::<Vec<_>>();
-        let content_width = inner
-            .width
-            .saturating_sub(state.preview_line_number_cols as u16)
-            .max(1) as usize;
-        let mut rendered_total = 0usize;
+        let content_width = inner_width.saturating_sub(line_number_cols as u16).max(1) as usize;
         let mut lines = Vec::new();
         let mut row_changes = Vec::new();
         for (index, row) in rows.iter().enumerate() {
@@ -709,7 +685,6 @@ pub fn draw_preview(
                 None
             };
             let wrapped = wrap_styled_spans(vec![Span::raw((*row).to_string())], content_width);
-            rendered_total = rendered_total.saturating_add(wrapped.len());
             row_changes.extend(std::iter::repeat_n(
                 doc.line_changes.get(index).copied().flatten(),
                 wrapped.len(),
@@ -726,48 +701,122 @@ pub fn draw_preview(
                 lines.push(Line::from(spans));
             }
         }
-        (
-            Paragraph::new(Text::from(lines)).scroll((scroll_row, 0)),
-            rendered_total.max(1),
-            row_changes,
-        )
+        (lines, row_changes, line_number_cols)
     } else {
-        state.preview_line_number_cols = if show_diff_markers { 2 } else { 0 };
-        if show_diff_markers {
-            let rows = text.split('\n').collect::<Vec<_>>();
-            let mut lines = Vec::new();
-            let mut row_changes = Vec::new();
-            for (index, row) in rows.iter().enumerate() {
+        let line_number_cols = if show_diff_markers { 2 } else { 0 };
+        let rows = text.split('\n').collect::<Vec<_>>();
+        let mut lines = Vec::new();
+        let mut row_changes = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            if show_diff_markers {
                 let mut spans = diff_only_prefix(diff_marker_kind(
                     doc.line_changes.get(index).copied().flatten(),
                 ));
                 spans.push(Span::raw((*row).to_string()));
                 lines.push(Line::from(spans));
                 row_changes.push(doc.line_changes.get(index).copied().flatten());
+            } else {
+                lines.push(Line::from(Span::raw((*row).to_string())));
             }
-            (
-                Paragraph::new(Text::from(lines)).scroll((scroll_row, scroll_col)),
-                preview_total_lines(doc),
-                row_changes,
-            )
-        } else {
-            (
-                Paragraph::new(text).scroll((scroll_row, scroll_col)),
-                preview_total_lines(doc),
-                Vec::new(),
-            )
         }
+        (lines, row_changes, line_number_cols)
     };
+
+    PreviewRenderCache {
+        key: PreviewRenderCacheKey {
+            epoch,
+            inner_width,
+            show_line_numbers,
+            wrap_enabled: use_wrap,
+            content_ptr: doc.content_excerpt.as_ptr() as usize,
+            styled_lines_ptr: doc.styled_lines.as_ptr() as usize,
+            line_changes_ptr: doc.line_changes.as_ptr() as usize,
+        },
+        total_lines: rendered_lines.len().max(1),
+        rendered_lines,
+        rendered_row_changes,
+        line_number_cols,
+    }
+}
+
+pub fn draw_preview(
+    frame: &mut Frame<'_>,
+    area: ratatui::layout::Rect,
+    doc: &PreviewDocument,
+    state: &mut SessionState,
+    theme: &ThemeProfile,
+) {
+    frame.render_widget(Clear, area);
+    let title = preview_title_for_state(state);
+    let metadata_line =
+        preview_border_metadata_for_state(state, area.width.saturating_sub(2) as usize);
+    let block = Block::default()
+        .title(
+            Line::from(vec![Span::raw(" "), Span::raw(title), Span::raw(" ")])
+                .alignment(Alignment::Right),
+        )
+        .title_bottom(Line::from(metadata_line).alignment(Alignment::Right))
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    state.preview_inner_rect = (inner.x, inner.y, inner.width, inner.height);
+
+    let scroll_row_usize = state.preview_scroll_row;
+    let scroll_col = if state.preview_wrap_enabled {
+        0u16
+    } else {
+        state.preview_scroll_col.min(u16::MAX as usize) as u16
+    };
+    let show_line_numbers = line_numbers_enabled(state, doc);
+    let use_wrap = state.preview_wrap_enabled;
+    let cache_key = PreviewRenderCacheKey {
+        epoch: state.preview_render_epoch,
+        inner_width: inner.width,
+        show_line_numbers,
+        wrap_enabled: use_wrap,
+        content_ptr: doc.content_excerpt.as_ptr() as usize,
+        styled_lines_ptr: doc.styled_lines.as_ptr() as usize,
+        line_changes_ptr: doc.line_changes.as_ptr() as usize,
+    };
+    let cache_matches = state
+        .preview_render_cache
+        .as_ref()
+        .is_some_and(|cache| cache.key == cache_key);
+    if !cache_matches {
+        state.preview_render_cache = Some(build_preview_render_cache(
+            doc,
+            state.preview_render_epoch,
+            inner.width,
+            show_line_numbers,
+            use_wrap,
+            state.preview_diff_mode,
+        ));
+    }
+    let cache = state
+        .preview_render_cache
+        .as_ref()
+        .expect("preview render cache initialized");
+
+    state.preview_line_number_cols = cache.line_number_cols;
+    let viewport_rows = inner.height as usize;
+    let visible_start = scroll_row_usize.min(cache.rendered_lines.len());
+    let visible_end = visible_start
+        .saturating_add(viewport_rows)
+        .min(cache.rendered_lines.len());
+    let visible_lines = cache.rendered_lines[visible_start..visible_end].to_vec();
+    let content_widget = Paragraph::new(Text::from(visible_lines)).scroll((0, scroll_col));
+    let rendered_total_lines = cache.total_lines;
     let _ = theme;
     frame.render_widget(Clear, inner);
     frame.render_widget(content_widget, inner);
-    paint_full_row_diff_background(frame, inner, &rendered_row_changes, scroll_row_usize);
+    paint_full_row_diff_background(frame, inner, &cache.rendered_row_changes, scroll_row_usize);
     render_scroll_indicator(
         frame,
         inner,
         rendered_total_lines,
         scroll_row_usize,
-        &rendered_row_changes,
+        &cache.rendered_row_changes,
     );
 
     if let Some(sel) = &state.preview_selection {
@@ -796,6 +845,6 @@ pub fn draw_preview(
             .fg(Color::Black)
             .bg(Color::Yellow)
             .add_modifier(Modifier::BOLD);
-        render_overlay_label(frame, inner, " DIFF ", diff_style);
+        render_border_label_top_left(frame, area, " DIFF ", diff_style);
     }
 }

@@ -1,6 +1,6 @@
 use crate::app::state::{
-    ContentType, LoadState, NodeType, PreviewDocument, PreviewLineChange, SessionState,
-    StyledPreviewLine, StyledPreviewSegment, TreeNode,
+    ContentType, LoadState, NodeType, PreviewDiffCache, PreviewDiffCacheKey, PreviewDocument,
+    PreviewLineChange, SessionState, StyledPreviewLine, StyledPreviewSegment, TreeNode,
 };
 use crate::fs::current_dir::{list_current_directory_with_visibility, selected_entry_metadata};
 use crate::fs::git::{
@@ -10,6 +10,8 @@ use crate::fs::preview::load_preview;
 use crate::highlight::render::render_with_highlight;
 use crate::highlight::syntax::HighlightContext;
 use ratatui::style::{Color, Modifier};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::Instant;
 
@@ -177,13 +179,42 @@ fn lcs_table(left: &[String], right: &[String]) -> Vec<Vec<usize>> {
     table
 }
 
-fn diff_preview(path: &Path, ctx: &HighlightContext, max_bytes: usize) -> PreviewDocument {
+fn preview_diff_cache_key(path: &Path, current_doc: &PreviewDocument) -> PreviewDiffCacheKey {
+    let mut hasher = DefaultHasher::new();
+    current_doc.content_excerpt.hash(&mut hasher);
+
+    PreviewDiffCacheKey {
+        path: path.to_path_buf(),
+        current_content_hash: hasher.finish(),
+        content_type: current_doc.content_type.clone(),
+        language_id: current_doc.language_id.clone(),
+        truncated: current_doc.truncated,
+    }
+}
+
+fn diff_preview(
+    path: &Path,
+    ctx: &HighlightContext,
+    max_bytes: usize,
+    state: &mut SessionState,
+) -> PreviewDocument {
     let current_doc = load_preview(path, max_bytes, ctx);
     if current_doc.load_state != LoadState::Ready {
         return current_doc;
     }
 
+    let cache_key = preview_diff_cache_key(path, &current_doc);
+    if let Some(cache) = state.preview_diff_cache.as_ref() {
+        if cache.key == cache_key {
+            return cache.merged_doc.clone();
+        }
+    }
+
     let Some(base_content) = git_head_content_for_file(path) else {
+        state.preview_diff_cache = Some(PreviewDiffCache {
+            key: cache_key,
+            merged_doc: current_doc.clone(),
+        });
         return current_doc;
     };
 
@@ -200,6 +231,10 @@ fn diff_preview(path: &Path, ctx: &HighlightContext, max_bytes: usize) -> Previe
     let base_text_lines = styled_lines_to_text_lines(&base_lines);
 
     if base_text_lines == current_text_lines {
+        state.preview_diff_cache = Some(PreviewDiffCache {
+            key: cache_key,
+            merged_doc: current_doc.clone(),
+        });
         return current_doc;
     }
 
@@ -241,7 +276,7 @@ fn diff_preview(path: &Path, ctx: &HighlightContext, max_bytes: usize) -> Previe
         }
     }
 
-    PreviewDocument {
+    let merged_doc = PreviewDocument {
         source_path: path.to_path_buf(),
         load_state: LoadState::Ready,
         content_type: ContentType::Highlighted,
@@ -253,7 +288,12 @@ fn diff_preview(path: &Path, ctx: &HighlightContext, max_bytes: usize) -> Previe
         fallback_reason: None,
         truncated: current_doc.truncated,
         error_message: None,
-    }
+    };
+    state.preview_diff_cache = Some(PreviewDiffCache {
+        key: cache_key,
+        merged_doc: merged_doc.clone(),
+    });
+    merged_doc
 }
 
 pub fn refresh_preview(
@@ -267,13 +307,16 @@ pub fn refresh_preview(
         state.selected_path = node.path.clone();
         state.selected_metadata = selected_entry_metadata(node);
         if node.node_type == NodeType::Directory {
+            state.preview_diff_cache = None;
             directory_preview(&node.path, state.show_hidden)
         } else if state.preview_diff_mode {
-            diff_preview(&node.path, ctx, max_bytes)
+            diff_preview(&node.path, ctx, max_bytes, state)
         } else {
+            state.preview_diff_cache = None;
             load_preview(&node.path, max_bytes, ctx)
         }
     } else {
+        state.preview_diff_cache = None;
         state.selected_metadata = Default::default();
         PreviewDocument {
             load_state: LoadState::Error,
@@ -281,6 +324,8 @@ pub fn refresh_preview(
             ..PreviewDocument::default()
         }
     };
+    state.preview_render_epoch = state.preview_render_epoch.saturating_add(1);
+    state.preview_render_cache = None;
     state.last_preview_latency_ms = started.elapsed().as_millis();
     preview
 }

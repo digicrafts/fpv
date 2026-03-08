@@ -1,6 +1,6 @@
 [package]
 name = "fpv"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A minimal, keyboard-first TUI file previewer with syntax highlighting"
 license = "MIT"

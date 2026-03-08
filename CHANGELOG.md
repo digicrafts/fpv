@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.5] - 2026-03-08
+
+### Added
+
+- **Inline git diff preview mode** — diff view now keeps the normal syntax-highlighted file preview as the base, inserts deleted lines inline, and marks changes with bright `+` / `-` gutter indicators.
+- **Diff-aware scrollbar markers** — the preview scrollbar shows changed positions, and clicking the scrollbar jumps directly to the corresponding rendered line.
+
+### Changed
+
+- **Diff styling refresh** — added and deleted rows now use darker green/red full-line backgrounds, keep syntax-highlighted code colors, and show correct old/new line numbers in diff mode.
+- **Diff mode indicator placement** — the `DIFF` badge now renders on the upper border of the preview pane instead of covering preview content.
+- **Preview rendering performance** — large previews now use viewport-only rendering, cached rendered rows, and cached inline diff documents so repeated redraws and diff refreshes are cheaper.
+
 ## [0.1.4] - 2026-03-06
 
 ### Added

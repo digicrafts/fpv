@@ -1,6 +1,7 @@
 use crate::config::load::StatusDisplayMode;
 use crate::fs::git::GitRepoStatus;
 use ratatui::style::Style;
+use ratatui::text::Line;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +83,41 @@ pub type StyledPreviewLine = Vec<StyledPreviewSegment>;
 pub enum PreviewLineChange {
     Added,
     Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewRenderCacheKey {
+    pub epoch: u64,
+    pub inner_width: u16,
+    pub show_line_numbers: bool,
+    pub wrap_enabled: bool,
+    pub content_ptr: usize,
+    pub styled_lines_ptr: usize,
+    pub line_changes_ptr: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewRenderCache {
+    pub key: PreviewRenderCacheKey,
+    pub rendered_lines: Vec<Line<'static>>,
+    pub rendered_row_changes: Vec<Option<PreviewLineChange>>,
+    pub total_lines: usize,
+    pub line_number_cols: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewDiffCacheKey {
+    pub path: PathBuf,
+    pub current_content_hash: u64,
+    pub content_type: ContentType,
+    pub language_id: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewDiffCache {
+    pub key: PreviewDiffCacheKey,
+    pub merged_doc: PreviewDocument,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +228,9 @@ pub struct SessionState {
     pub preview_selecting: bool,
     pub preview_inner_rect: (u16, u16, u16, u16),
     pub preview_line_number_cols: usize,
+    pub preview_render_epoch: u64,
+    pub preview_render_cache: Option<PreviewRenderCache>,
+    pub preview_diff_cache: Option<PreviewDiffCache>,
     pub preview_copy_indicator: bool,
     pub preview_copying_indicator: bool,
     pub preview_diff_mode: bool,
@@ -232,6 +271,9 @@ impl SessionState {
             preview_selecting: false,
             preview_inner_rect: (0, 0, 0, 0),
             preview_line_number_cols: 0,
+            preview_render_epoch: 0,
+            preview_render_cache: None,
+            preview_diff_cache: None,
             preview_copy_indicator: false,
             preview_copying_indicator: false,
             preview_diff_mode: false,

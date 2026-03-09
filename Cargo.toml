@@ -3,6 +3,7 @@ name = "fpv"
 version = "0.1.7"
 edition = "2021"
 description = "A minimal, keyboard-first TUI file previewer with syntax highlighting"
+authors = ["Digicrafts"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/digicrafts/fpv"
@@ -40,6 +41,9 @@ tree-sitter-bash = "=0.20.5"
 tree-sitter-css = "=0.20.0"
 tree-sitter-toml = "=0.20.0"
 tree-sitter-md = "=0.1.7"
+
+[package.metadata.deb]
+copyright = "MIT"
 
 [dev-dependencies]
 assert_cmd = "=2.0.14"

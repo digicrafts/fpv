@@ -85,11 +85,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+          include:
           - target: x86_64-unknown-linux-gnu
             build_tool: cargo
             artifact: debian-amd64
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             build_tool: cross
             artifact: debian-arm64
     steps:
@@ -108,7 +108,7 @@ jobs:
           else
             cargo build --release --target ${{ matrix.target }}
           fi
-          cargo deb --target ${{ matrix.target }} --no-build
+          cargo deb --target ${{ matrix.target }} --no-build --no-strip
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:

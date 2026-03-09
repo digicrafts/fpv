@@ -82,18 +82,38 @@ jobs:
   build-deb:
     needs: verify
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            build_tool: cargo
+            artifact: debian-amd64
+          - target: aarch64-unknown-linux-gnu
+            build_tool: cross
+            artifact: debian-arm64
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        if: ${{ matrix.build_tool == 'cross' }}
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
       - name: Install cargo-deb
         run: cargo install cargo-deb --locked
       - name: Build .deb package
-        run: cargo deb --target x86_64-unknown-linux-gnu
+        shell: bash
+        run: |
+          if [[ "${{ matrix.build_tool }}" == "cross" ]]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+          cargo deb --target ${{ matrix.target }} --no-build
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: debian-amd64
-          path: target/x86_64-unknown-linux-gnu/debian/*.deb
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/debian/*.deb
           if-no-files-found: error
 
   github-release:
@@ -143,14 +163,14 @@ jobs:
           echo "macos_arm64_sha=${MACOS_ARM64_SHA}" >> "${GITHUB_OUTPUT}"
 
           find dist -type f -maxdepth 3 | sort > files.txt
-          sha256sum dist/*/*.tar.gz dist/debian-amd64/*.deb > checksums.txt
+          sha256sum dist/*/*.tar.gz dist/debian-*/*.deb > checksums.txt
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
             dist/*/*.tar.gz
-            dist/debian-amd64/*.deb
+            dist/debian-*/*.deb
             checksums.txt
 
   publish-crates:
@@ -245,12 +265,12 @@ jobs:
       CLOUDSMITH_RELEASE: ${{ vars.CLOUDSMITH_RELEASE }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download .deb artifact
+      - name: Download .deb artifacts
         if: ${{ env.CLOUDSMITH_API_KEY != '' }}
         uses: actions/download-artifact@v4
         with:
-          name: debian-amd64
-          path: dist/debian-amd64
+          pattern: debian-*
+          path: dist
       - name: Install Cloudsmith CLI
         if: ${{ env.CLOUDSMITH_API_KEY != '' }}
         run: pipx install cloudsmith-cli
@@ -277,4 +297,4 @@ jobs:
             TARGET_REPO="${CLOUDSMITH_REPO}/${TARGET_DISTRIBUTION}/${TARGET_RELEASE}"
           fi
           echo "Publishing to Cloudsmith repository: ${TARGET_REPO}"
-          cloudsmith push deb "${TARGET_REPO}" dist/debian-amd64/*.deb --republish
+          cloudsmith push deb "${TARGET_REPO}" dist/debian-*/*.deb --republish

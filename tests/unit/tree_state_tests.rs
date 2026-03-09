@@ -240,6 +240,26 @@ fn preview_scroll_is_reclamped_when_content_shrinks() {
 }
 
 #[test]
+fn preview_scroll_reports_no_change_at_vertical_bounds() {
+    let mut state = SessionState::new(PathBuf::from("."));
+    assert!(!state.scroll_preview_lines(-1, 10, 5));
+
+    state.scroll_preview_lines(5, 10, 5);
+    assert_eq!(state.preview_scroll_row, 5);
+    assert!(!state.scroll_preview_lines(1, 10, 5));
+}
+
+#[test]
+fn preview_scroll_reports_no_change_at_horizontal_bounds() {
+    let mut state = SessionState::new(PathBuf::from("."));
+    assert!(!state.scroll_preview_cols(-1, 20, 10));
+
+    assert!(state.scroll_preview_cols(5, 20, 10));
+    assert_eq!(state.preview_scroll_col, 5);
+    assert!(!state.scroll_preview_cols(100, 15, 10));
+}
+
+#[test]
 fn preview_defaults_enable_line_numbers_and_disable_wrap() {
     let state = SessionState::new(PathBuf::from("."));
     assert!(state.preview_show_line_numbers);

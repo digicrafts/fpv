@@ -1,4 +1,5 @@
 use crate::config::load::StatusDisplayMode;
+use crossterm::event::Event;
 use crate::fs::git::GitRepoStatus;
 use ratatui::style::Style;
 use ratatui::text::Line;
@@ -215,6 +216,7 @@ pub struct SessionState {
     pub selected_changed_at: Instant,
     pub focus_pane: FocusPane,
     pub status_message: String,
+    pub current_dir_error: Option<String>,
     pub last_preview_latency_ms: u128,
     pub last_child_path: Option<PathBuf>,
     pub show_hidden: bool,
@@ -244,6 +246,7 @@ pub struct SessionState {
     pub help_overlay_visible: bool,
     pub status_display_mode: StatusDisplayMode,
     pub git_status: Option<GitRepoStatus>,
+    pub deferred_input_event: Option<Event>,
 }
 
 impl SessionState {
@@ -260,6 +263,7 @@ impl SessionState {
             selected_changed_at: Instant::now(),
             focus_pane: FocusPane::Tree,
             status_message: String::new(),
+            current_dir_error: None,
             last_preview_latency_ms: 0,
             last_child_path: None,
             show_hidden: false,
@@ -289,6 +293,7 @@ impl SessionState {
             help_overlay_visible: false,
             status_display_mode: StatusDisplayMode::Bar,
             git_status: None,
+            deferred_input_event: None,
         }
     }
 
@@ -320,7 +325,13 @@ impl SessionState {
         }
     }
 
-    pub fn scroll_preview_lines(&mut self, delta: isize, total_lines: usize, viewport_rows: usize) {
+    pub fn scroll_preview_lines(
+        &mut self,
+        delta: isize,
+        total_lines: usize,
+        viewport_rows: usize,
+    ) -> bool {
+        let before = self.preview_scroll_row;
         let max_scroll = max_scroll_row(total_lines, viewport_rows);
         if delta < 0 {
             self.preview_scroll_row = self.preview_scroll_row.saturating_sub((-delta) as usize);
@@ -330,9 +341,16 @@ impl SessionState {
                 .saturating_add(delta as usize)
                 .min(max_scroll);
         }
+        self.preview_scroll_row != before
     }
 
-    pub fn scroll_preview_cols(&mut self, delta: isize, max_width: usize, viewport_cols: usize) {
+    pub fn scroll_preview_cols(
+        &mut self,
+        delta: isize,
+        max_width: usize,
+        viewport_cols: usize,
+    ) -> bool {
+        let before = self.preview_scroll_col;
         let max_scroll = max_width.saturating_sub(viewport_cols);
         if delta < 0 {
             self.preview_scroll_col = self.preview_scroll_col.saturating_sub((-delta) as usize);
@@ -342,16 +360,17 @@ impl SessionState {
                 .saturating_add(delta as usize)
                 .min(max_scroll);
         }
+        self.preview_scroll_col != before
     }
 
-    pub fn page_scroll_preview_down(&mut self, total_lines: usize, viewport_rows: usize) {
+    pub fn page_scroll_preview_down(&mut self, total_lines: usize, viewport_rows: usize) -> bool {
         let page = viewport_rows.max(1) as isize;
-        self.scroll_preview_lines(page, total_lines, viewport_rows);
+        self.scroll_preview_lines(page, total_lines, viewport_rows)
     }
 
-    pub fn page_scroll_preview_up(&mut self, total_lines: usize, viewport_rows: usize) {
+    pub fn page_scroll_preview_up(&mut self, total_lines: usize, viewport_rows: usize) -> bool {
         let page = viewport_rows.max(1) as isize;
-        self.scroll_preview_lines(-page, total_lines, viewport_rows);
+        self.scroll_preview_lines(-page, total_lines, viewport_rows)
     }
 
     pub fn resize_preview_by(&mut self, delta_cols: i16, main_width: u16) {
@@ -444,6 +463,14 @@ impl SessionState {
             self.selected_path = path;
             self.selected_changed_at = Instant::now();
         }
+    }
+
+    pub fn set_current_dir_error(&mut self, message: impl Into<String>) {
+        self.current_dir_error = Some(message.into());
+    }
+
+    pub fn clear_current_dir_error(&mut self) {
+        self.current_dir_error = None;
     }
 }
 

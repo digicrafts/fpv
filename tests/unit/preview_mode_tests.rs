@@ -878,3 +878,56 @@ fn diff_mode_uses_highlighted_file_preview_with_inline_changes() {
             && segment.style.bg == Some(Color::Rgb(0, 70, 0))
     }));
 }
+
+#[test]
+fn diff_mode_skips_large_line_sets() {
+    let d = tempdir().expect("create tempdir");
+    let repo = d.path();
+    let file_path = repo.join("main.rs");
+
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git command failed: {:?}", args);
+    };
+
+    run_git(&["init"]);
+    run_git(&["config", "user.name", "fpv-tests"]);
+    run_git(&["config", "user.email", "fpv@example.com"]);
+
+    let base = (0..2_100)
+        .map(|index| format!("let v{index} = {index};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file_path, format!("{base}\n")).expect("write base");
+    run_git(&["add", "main.rs"]);
+    run_git(&["commit", "-m", "base"]);
+
+    let current = (0..2_100)
+        .map(|index| format!("let next_{index} = {};", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&file_path, format!("{current}\n")).expect("write current");
+
+    let nodes = vec![TreeNode {
+        path: file_path,
+        name: "main.rs".to_string(),
+        node_type: NodeType::File,
+        depth: 0,
+        expanded: false,
+        readable: true,
+        children_loaded: false,
+    }];
+
+    let mut state = SessionState::new(repo.to_path_buf());
+    state.preview_diff_mode = true;
+    let ctx = HighlightContext::new();
+    let doc = refresh_preview(&mut state, &nodes, &ctx, 1024 * 1024);
+
+    assert!(doc.line_changes.is_empty());
+    assert!(doc.display_line_numbers.is_empty());
+    assert_eq!(doc.load_state, LoadState::Ready);
+}

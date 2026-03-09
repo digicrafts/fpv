@@ -3,7 +3,6 @@ use crate::app::state::{
     PreviewRenderCache, PreviewRenderCacheKey, PreviewSelection, SessionState,
 };
 use crate::config::load::ThemeProfile;
-use crate::fs::preview::render_image_preview_for_width;
 use crate::tui::status_bar::compose_preview_metadata_line;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
@@ -12,6 +11,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
+
+const RENDER_CACHE_MAX_LINES: usize = 8_000;
+const RENDER_CACHE_MAX_TEXT_BYTES: usize = 512 * 1024;
 
 pub fn preview_title_for_state(state: &SessionState) -> String {
     if state.selected_metadata.filename.trim().is_empty() || state.selected_metadata.filename == "-"
@@ -561,14 +563,7 @@ fn build_preview_render_cache(
     let text = plain_text_for_doc(doc);
     let show_diff_markers = diff_mode && doc.line_changes.iter().any(|c| c.is_some());
     let render_styled_lines: Cow<'_, [crate::app::state::StyledPreviewLine]> =
-        if doc.image_preview && !doc.image_preview_pending {
-            match render_image_preview_for_width(&doc.source_path, inner_width.max(1)) {
-                Some((_, lines)) => Cow::Owned(lines),
-                None => Cow::Borrowed(&doc.styled_lines),
-            }
-        } else {
-            Cow::Borrowed(&doc.styled_lines)
-        };
+        Cow::Borrowed(&doc.styled_lines);
 
     let (rendered_lines, rendered_row_changes, line_number_cols) = if show_line_numbers {
         if has_styled_preview_content(doc) {
@@ -756,6 +751,10 @@ fn build_preview_render_cache(
     }
 }
 
+fn should_cache_render(doc: &PreviewDocument, cache: &PreviewRenderCache) -> bool {
+    cache.total_lines <= RENDER_CACHE_MAX_LINES && doc.content_excerpt.len() <= RENDER_CACHE_MAX_TEXT_BYTES
+}
+
 pub fn draw_preview(
     frame: &mut Frame<'_>,
     area: ratatui::layout::Rect,
@@ -801,19 +800,30 @@ pub fn draw_preview(
         .as_ref()
         .is_some_and(|cache| cache.key == cache_key);
     if !cache_matches {
-        state.preview_render_cache = Some(build_preview_render_cache(
+        let built_cache = build_preview_render_cache(
             doc,
             state.preview_render_epoch,
             inner.width,
             show_line_numbers,
             use_wrap,
             state.preview_diff_mode,
-        ));
+        );
+        state.preview_render_cache = should_cache_render(doc, &built_cache).then_some(built_cache);
     }
-    let cache = state
-        .preview_render_cache
-        .as_ref()
-        .expect("preview render cache initialized");
+    let fallback_cache;
+    let cache = if let Some(cache) = state.preview_render_cache.as_ref() {
+        cache
+    } else {
+        fallback_cache = build_preview_render_cache(
+            doc,
+            state.preview_render_epoch,
+            inner.width,
+            show_line_numbers,
+            use_wrap,
+            state.preview_diff_mode,
+        );
+        &fallback_cache
+    };
 
     state.preview_line_number_cols = cache.line_number_cols;
     let viewport_rows = inner.height as usize;

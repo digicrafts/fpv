@@ -1,4 +1,5 @@
 use fpv::app::navigation::enter_selected_directory;
+use fpv::app::navigation_result::ActionOutcome;
 use fpv::app::state::{NodeType, SessionState, TreeNode};
 use std::fs;
 use std::path::PathBuf;
@@ -40,4 +41,29 @@ fn entering_file_is_no_change() {
     }];
     let result = enter_selected_directory(&mut state, &mut nodes).expect("result");
     assert_eq!(result.new_path, state.current_path);
+}
+
+#[test]
+fn entering_directory_that_becomes_unreachable_is_blocked() {
+    let d = tempdir().expect("tempdir");
+    let child = d.path().join("child");
+    fs::create_dir_all(&child).expect("mkdir");
+
+    let mut state = SessionState::new(d.path().to_path_buf());
+    let mut nodes = vec![TreeNode {
+        path: child.clone(),
+        name: "child".to_string(),
+        node_type: NodeType::Directory,
+        depth: 0,
+        expanded: false,
+        readable: true,
+        children_loaded: false,
+    }];
+
+    fs::remove_dir_all(&child).expect("remove child");
+
+    let result = enter_selected_directory(&mut state, &mut nodes).expect("enter");
+    assert_eq!(result.outcome, ActionOutcome::Blocked);
+    assert_eq!(state.current_path, d.path());
+    assert!(state.current_dir_error.is_none());
 }

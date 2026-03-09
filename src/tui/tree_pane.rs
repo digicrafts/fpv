@@ -178,8 +178,11 @@ pub fn draw_tree(
 ) {
     frame.render_widget(Clear, area);
     if nodes.is_empty() {
-        let empty =
-            Paragraph::new("(empty directory)").block(Block::default().borders(Borders::ALL));
+        let empty_label = state
+            .current_dir_error
+            .as_deref()
+            .unwrap_or("(empty directory)");
+        let empty = Paragraph::new(empty_label).block(Block::default().borders(Borders::ALL));
         frame.render_widget(empty, area);
         return;
     }

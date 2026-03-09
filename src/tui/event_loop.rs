@@ -21,6 +21,12 @@ fn main_area_width() -> u16 {
     crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollIntent {
+    Vertical,
+    Horizontal,
+}
+
 fn apply_mouse_resize(state: &mut SessionState, mouse: MouseEvent) -> bool {
     let width = main_area_width();
     let divider = state.divider_column(width);
@@ -165,6 +171,127 @@ fn preview_scrollbar_target_row(
 fn preview_viewport_cols(state: &SessionState) -> usize {
     let (_, _, inner_w, _) = state.preview_inner_rect;
     (inner_w as usize).saturating_sub(state.preview_line_number_cols)
+}
+
+fn preview_scroll_intent(
+    event: &Event,
+    state: &SessionState,
+    bindings: &HashMap<Action, crossterm::event::KeyEvent>,
+) -> Option<ScrollIntent> {
+    match event {
+        Event::Mouse(mouse) if in_preview_panel(state, *mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if mouse.modifiers.contains(KeyModifiers::SHIFT) && !state.preview_wrap_enabled {
+                    Some(ScrollIntent::Horizontal)
+                } else {
+                    Some(ScrollIntent::Vertical)
+                }
+            }
+            _ => None,
+        },
+        Event::Key(key) => {
+            if state.help_overlay_visible {
+                return None;
+            }
+
+            use crossterm::event::KeyCode;
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                return match key.code {
+                    KeyCode::Up | KeyCode::Down => Some(ScrollIntent::Vertical),
+                    KeyCode::Left | KeyCode::Right if !state.preview_wrap_enabled => {
+                        Some(ScrollIntent::Horizontal)
+                    }
+                    _ => None,
+                };
+            }
+
+            match map_key_to_action(*key, bindings) {
+                Some(Action::PageUp)
+                | Some(Action::PageDown)
+                | Some(Action::PreviewScrollUp)
+                | Some(Action::PreviewScrollDown) => {
+                    if state.preview_fullscreen || state.focus_pane == FocusPane::Preview {
+                        Some(ScrollIntent::Vertical)
+                    } else {
+                        None
+                    }
+                }
+                Some(Action::PreviewScrollLeft) | Some(Action::PreviewScrollRight) => {
+                    if (state.preview_fullscreen || state.focus_pane == FocusPane::Preview)
+                        && !state.preview_wrap_enabled
+                    {
+                        Some(ScrollIntent::Horizontal)
+                    } else {
+                        None
+                    }
+                }
+                Some(Action::MoveUp) | Some(Action::MoveDown) if state.preview_fullscreen => {
+                    Some(ScrollIntent::Vertical)
+                }
+                Some(Action::Expand) | Some(Action::Collapse)
+                    if state.preview_fullscreen && !state.preview_wrap_enabled =>
+                {
+                    Some(ScrollIntent::Horizontal)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn coalesce_preview_scroll_event(
+    state: &mut SessionState,
+    bindings: &HashMap<Action, crossterm::event::KeyEvent>,
+    initial_event: Event,
+) -> Result<Event> {
+    let Some(initial_intent) = preview_scroll_intent(&initial_event, state, bindings) else {
+        return Ok(initial_event);
+    };
+
+    let mut latest_event = initial_event;
+    while event::poll(Duration::from_millis(0))? {
+        let next_event = event::read()?;
+        let next_intent = preview_scroll_intent(&next_event, state, bindings);
+        if next_intent == Some(initial_intent) {
+            latest_event = next_event;
+            continue;
+        }
+
+        if next_intent.is_some() {
+            latest_event = next_event;
+            continue;
+        }
+
+        state.deferred_input_event = Some(next_event);
+        break;
+    }
+
+    Ok(latest_event)
+}
+
+fn defer_or_discard_redundant_mouse_scrolls(
+    state: &mut SessionState,
+    kind: MouseEventKind,
+    modifiers: KeyModifiers,
+) -> Result<()> {
+    while event::poll(Duration::from_millis(0))? {
+        let next_event = event::read()?;
+        let Event::Mouse(next_mouse) = next_event else {
+            state.deferred_input_event = Some(next_event);
+            return Ok(());
+        };
+
+        let same_scroll = next_mouse.kind == kind && next_mouse.modifiers == modifiers;
+        if same_scroll && in_preview_panel(state, next_mouse) {
+            continue;
+        }
+
+        state.deferred_input_event = Some(Event::Mouse(next_mouse));
+        return Ok(());
+    }
+
+    Ok(())
 }
 
 fn base64_encode(data: &[u8]) -> String {
@@ -338,13 +465,19 @@ pub fn process_once(
     preview_viewport_rows: usize,
     preview_doc: &PreviewDocument,
 ) -> Result<(bool, bool, bool)> {
-    if !event::poll(Duration::from_millis(50))? {
-        return Ok((false, false, false));
-    }
-
     let mut should_refresh_preview = false;
     let mut should_refresh_tree = false;
-    match event::read()? {
+    let next_event = if let Some(event) = state.deferred_input_event.take() {
+        event
+    } else {
+        if !event::poll(Duration::from_millis(50))? {
+            return Ok((false, false, false));
+        }
+        event::read()?
+    };
+    let next_event = coalesce_preview_scroll_event(state, bindings, next_event)?;
+
+    match next_event {
         Event::Key(key) => {
             state.preview_selection = None;
             state.preview_selecting = false;
@@ -355,23 +488,31 @@ pub fn process_once(
                 use crossterm::event::KeyCode;
                 match key.code {
                     KeyCode::Up => {
-                        state.scroll_preview_lines(-3, preview_total_lines, preview_viewport_rows);
+                        let _ = state.scroll_preview_lines(
+                            -3,
+                            preview_total_lines,
+                            preview_viewport_rows,
+                        );
                         return Ok((false, false, false));
                     }
                     KeyCode::Down => {
-                        state.scroll_preview_lines(3, preview_total_lines, preview_viewport_rows);
+                        let _ = state.scroll_preview_lines(
+                            3,
+                            preview_total_lines,
+                            preview_viewport_rows,
+                        );
                         return Ok((false, false, false));
                     }
                     KeyCode::Left if !state.preview_wrap_enabled => {
                         let vp = preview_viewport_cols(state);
                         let mw = preview_max_line_width(preview_doc);
-                        state.scroll_preview_cols(-3, mw, vp);
+                        let _ = state.scroll_preview_cols(-3, mw, vp);
                         return Ok((false, false, false));
                     }
                     KeyCode::Right if !state.preview_wrap_enabled => {
                         let vp = preview_viewport_cols(state);
                         let mw = preview_max_line_width(preview_doc);
-                        state.scroll_preview_cols(3, mw, vp);
+                        let _ = state.scroll_preview_cols(3, mw, vp);
                         return Ok((false, false, false));
                     }
                     _ => {}
@@ -388,7 +529,7 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen {
-                            state.scroll_preview_lines(
+                            let _ = state.scroll_preview_lines(
                                 -1,
                                 preview_total_lines,
                                 preview_viewport_rows,
@@ -405,7 +546,7 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen {
-                            state.scroll_preview_lines(
+                            let _ = state.scroll_preview_lines(
                                 1,
                                 preview_total_lines,
                                 preview_viewport_rows,
@@ -424,7 +565,7 @@ pub fn process_once(
                         if state.preview_fullscreen && !state.preview_wrap_enabled {
                             let vp = preview_viewport_cols(state);
                             let mw = preview_max_line_width(preview_doc);
-                            state.scroll_preview_cols(1, mw, vp);
+                            let _ = state.scroll_preview_cols(1, mw, vp);
                         } else if !state.preview_fullscreen {
                             let result = enter_selected_directory(state, nodes)?;
                             state.status_message = format_status_with_path(
@@ -442,7 +583,7 @@ pub fn process_once(
                         if state.preview_fullscreen && !state.preview_wrap_enabled {
                             let vp = preview_viewport_cols(state);
                             let mw = preview_max_line_width(preview_doc);
-                            state.scroll_preview_cols(-1, mw, vp);
+                            let _ = state.scroll_preview_cols(-1, mw, vp);
                         } else if !state.preview_fullscreen
                             && !is_filesystem_root(&state.current_path)
                         {
@@ -500,8 +641,10 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen || state.focus_pane == FocusPane::Preview {
-                            state
-                                .page_scroll_preview_up(preview_total_lines, preview_viewport_rows);
+                            let _ = state.page_scroll_preview_up(
+                                preview_total_lines,
+                                preview_viewport_rows,
+                            );
                         }
                     }
                     Action::PageDown => {
@@ -509,7 +652,7 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen || state.focus_pane == FocusPane::Preview {
-                            state.page_scroll_preview_down(
+                            let _ = state.page_scroll_preview_down(
                                 preview_total_lines,
                                 preview_viewport_rows,
                             );
@@ -520,7 +663,7 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen || state.focus_pane == FocusPane::Preview {
-                            state.scroll_preview_lines(
+                            let _ = state.scroll_preview_lines(
                                 -3,
                                 preview_total_lines,
                                 preview_viewport_rows,
@@ -532,7 +675,7 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen || state.focus_pane == FocusPane::Preview {
-                            state.scroll_preview_lines(
+                            let _ = state.scroll_preview_lines(
                                 3,
                                 preview_total_lines,
                                 preview_viewport_rows,
@@ -548,7 +691,7 @@ pub fn process_once(
                         {
                             let vp = preview_viewport_cols(state);
                             let mw = preview_max_line_width(preview_doc);
-                            state.scroll_preview_cols(-3, mw, vp);
+                            let _ = state.scroll_preview_cols(-3, mw, vp);
                         }
                     }
                     Action::PreviewScrollRight => {
@@ -560,7 +703,7 @@ pub fn process_once(
                         {
                             let vp = preview_viewport_cols(state);
                             let mw = preview_max_line_width(preview_doc);
-                            state.scroll_preview_cols(3, mw, vp);
+                            let _ = state.scroll_preview_cols(3, mw, vp);
                         }
                     }
                     Action::TogglePreviewLineNumbers => {
@@ -722,13 +865,25 @@ pub fn process_once(
                             {
                                 let vp = preview_viewport_cols(state);
                                 let mw = preview_max_line_width(preview_doc);
-                                state.scroll_preview_cols(-3, mw, vp);
+                                if !state.scroll_preview_cols(-3, mw, vp) {
+                                    defer_or_discard_redundant_mouse_scrolls(
+                                        state,
+                                        mouse.kind,
+                                        mouse.modifiers,
+                                    )?;
+                                }
                             } else {
-                                state.scroll_preview_lines(
+                                if !state.scroll_preview_lines(
                                     -3,
                                     preview_total_lines,
                                     preview_viewport_rows,
-                                );
+                                ) {
+                                    defer_or_discard_redundant_mouse_scrolls(
+                                        state,
+                                        mouse.kind,
+                                        mouse.modifiers,
+                                    )?;
+                                }
                             }
                         }
                         MouseEventKind::ScrollDown => {
@@ -737,13 +892,25 @@ pub fn process_once(
                             {
                                 let vp = preview_viewport_cols(state);
                                 let mw = preview_max_line_width(preview_doc);
-                                state.scroll_preview_cols(3, mw, vp);
+                                if !state.scroll_preview_cols(3, mw, vp) {
+                                    defer_or_discard_redundant_mouse_scrolls(
+                                        state,
+                                        mouse.kind,
+                                        mouse.modifiers,
+                                    )?;
+                                }
                             } else {
-                                state.scroll_preview_lines(
+                                if !state.scroll_preview_lines(
                                     3,
                                     preview_total_lines,
                                     preview_viewport_rows,
-                                );
+                                ) {
+                                    defer_or_discard_redundant_mouse_scrolls(
+                                        state,
+                                        mouse.kind,
+                                        mouse.modifiers,
+                                    )?;
+                                }
                             }
                         }
                         _ => {}

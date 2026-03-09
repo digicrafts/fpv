@@ -259,14 +259,22 @@ jobs:
         shell: bash
         run: |
           TARGET_REPO="${CLOUDSMITH_REPO}"
+          TARGET_DISTRIBUTION="${CLOUDSMITH_DISTRIBUTION:-}"
+          TARGET_RELEASE="${CLOUDSMITH_RELEASE:-}"
           if [[ "${CLOUDSMITH_REPO}" != */*/* ]]; then
-            if [[ -z "${CLOUDSMITH_DISTRIBUTION}" ]]; then
-              echo "CLOUDSMITH_REPO must be OWNER/REPO/DISTRO[/RELEASE] or set CLOUDSMITH_DISTRIBUTION."
-              exit 1
+            if [[ -z "${TARGET_DISTRIBUTION}" ]]; then
+              TARGET_DISTRIBUTION="ubuntu"
+              echo "CLOUDSMITH_DISTRIBUTION is not set, defaulting to '${TARGET_DISTRIBUTION}'."
             fi
-            TARGET_REPO="${CLOUDSMITH_REPO}/${CLOUDSMITH_DISTRIBUTION}"
-            if [[ -n "${CLOUDSMITH_RELEASE}" ]]; then
-              TARGET_REPO="${TARGET_REPO}/${CLOUDSMITH_RELEASE}"
+            if [[ -z "${TARGET_RELEASE}" ]]; then
+              if command -v lsb_release >/dev/null 2>&1; then
+                TARGET_RELEASE="$(lsb_release -cs)"
+              else
+                TARGET_RELEASE="stable"
+              fi
+              echo "CLOUDSMITH_RELEASE is not set, defaulting to '${TARGET_RELEASE}'."
             fi
+            TARGET_REPO="${CLOUDSMITH_REPO}/${TARGET_DISTRIBUTION}/${TARGET_RELEASE}"
           fi
+          echo "Publishing to Cloudsmith repository: ${TARGET_REPO}"
           cloudsmith push deb "${TARGET_REPO}" dist/debian-amd64/*.deb --republish

@@ -1,12 +1,36 @@
 use crate::app::navigation_result::NavigationActionResult;
 use crate::app::state::{NodeType, SessionState, TreeNode};
 use crate::fs::current_dir::{
-    is_filesystem_root, list_current_directory_with_visibility, parent_path,
+    directory_access_error_message, is_filesystem_root, list_current_directory_with_visibility,
+    parent_path,
 };
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 const MAX_DIR_ENTRIES: usize = 2000;
+
+fn replace_directory_entries(
+    state: &mut SessionState,
+    nodes: &mut Vec<TreeNode>,
+    entries: Vec<TreeNode>,
+    preferred: Option<&PathBuf>,
+) {
+    state.clear_current_dir_error();
+    *nodes = entries;
+    state.restore_or_default_selection(nodes, preferred);
+    state.update_selected_path(nodes);
+}
+
+fn set_current_directory_error(
+    state: &mut SessionState,
+    nodes: &mut Vec<TreeNode>,
+    message: String,
+) {
+    state.set_current_dir_error(message);
+    nodes.clear();
+    state.selected_index = 0;
+    state.set_selected_path(state.current_path.clone());
+}
 
 fn absolute_current_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -75,13 +99,19 @@ pub fn enter_selected_directory(
 
     let target = node.path.clone();
     let entries =
-        list_current_directory_with_visibility(&target, MAX_DIR_ENTRIES, state.show_hidden)?;
+        match list_current_directory_with_visibility(&target, MAX_DIR_ENTRIES, state.show_hidden) {
+            Ok(entries) => entries,
+            Err(error) => {
+                return Ok(NavigationActionResult::blocked(
+                    "enter_directory",
+                    state.current_path.clone(),
+                    directory_access_error_message(&error),
+                ));
+            }
+        };
     state.last_child_path = Some(target.clone());
     state.current_path = target.clone();
-    *nodes = entries;
-    state.selected_index = 0;
-    state.revalidate_selection(nodes);
-    state.update_selected_path(nodes);
+    replace_directory_entries(state, nodes, entries, None);
 
     Ok(NavigationActionResult::changed(
         "enter_directory",
@@ -114,11 +144,18 @@ pub fn go_to_parent_directory(
 
     let previous_child = current_path;
     let entries =
-        list_current_directory_with_visibility(&parent, MAX_DIR_ENTRIES, state.show_hidden)?;
+        match list_current_directory_with_visibility(&parent, MAX_DIR_ENTRIES, state.show_hidden) {
+            Ok(entries) => entries,
+            Err(error) => {
+                return Ok(NavigationActionResult::blocked(
+                    "go_parent",
+                    state.current_path.clone(),
+                    directory_access_error_message(&error),
+                ));
+            }
+        };
     state.current_path = parent.clone();
-    *nodes = entries;
-    state.restore_or_default_selection(nodes, Some(&previous_child));
-    state.update_selected_path(nodes);
+    replace_directory_entries(state, nodes, entries, Some(&previous_child));
 
     Ok(NavigationActionResult::changed(
         "go_parent",
@@ -132,14 +169,23 @@ pub fn refresh_current_directory(
     nodes: &mut Vec<TreeNode>,
 ) -> Result<NavigationActionResult> {
     let previous_selected_path = nodes.get(state.selected_index).map(|n| n.path.clone());
-    let entries = list_current_directory_with_visibility(
+    let entries = match list_current_directory_with_visibility(
         &state.current_path,
         MAX_DIR_ENTRIES,
         state.show_hidden,
-    )?;
-    *nodes = entries;
-    state.restore_or_default_selection(nodes, previous_selected_path.as_ref());
-    state.update_selected_path(nodes);
+    ) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let message = directory_access_error_message(&error);
+            set_current_directory_error(state, nodes, message.clone());
+            return Ok(NavigationActionResult::blocked(
+                "refresh_current_dir",
+                state.current_path.clone(),
+                message,
+            ));
+        }
+    };
+    replace_directory_entries(state, nodes, entries, previous_selected_path.as_ref());
 
     Ok(NavigationActionResult::changed(
         "refresh_current_dir",

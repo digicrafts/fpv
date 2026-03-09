@@ -1,8 +1,9 @@
 use crate::app::current_dir_state::METADATA_FALLBACK;
 use crate::app::state::{NodeType, SelectedEntryMetadata, TreeNode};
-use anyhow::Result;
+use anyhow::{Error, Result};
 use std::cmp::Ordering;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use time::{Month, OffsetDateTime};
@@ -97,6 +98,18 @@ pub fn list_current_directory_with_visibility(
 
     nodes.sort_by(directory_first_cmp);
     Ok(nodes)
+}
+
+pub fn directory_access_error_message(error: &Error) -> String {
+    if let Some(io_error) = error.downcast_ref::<io::Error>() {
+        return match io_error.kind() {
+            io::ErrorKind::PermissionDenied => "Permission denied.".to_string(),
+            io::ErrorKind::NotFound => "Directory unreachable.".to_string(),
+            _ => format!("Cannot read directory: {io_error}"),
+        };
+    }
+
+    format!("Cannot read directory: {error}")
 }
 
 fn is_hidden_name(name: &str) -> bool {

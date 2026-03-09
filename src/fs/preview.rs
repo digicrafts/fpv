@@ -7,15 +7,90 @@ use crate::highlight::syntax::HighlightContext;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
 use ratatui::style::{Color, Style};
+use std::io::Read;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const BINARY_SAMPLE: usize = 1024;
 const HIGHLIGHT_MAX_BYTES: usize = 256 * 1024;
+const TEXT_PREVIEW_READ_LIMIT: usize = 2 * 1024 * 1024;
+const IMAGE_PREVIEW_READ_LIMIT: usize = 8 * 1024 * 1024;
 const ASCII_IMAGE_ASPECT_RATIO: f32 = 0.5;
 const IMAGE_PREVIEW_MAX_WIDTH: u32 = 60;
 const IMAGE_PREVIEW_MAX_HEIGHT: u32 = 30;
 const ASCII_IMAGE_RAMP: [char; 4] = ['█', '▓', '▒', '░'];
+
+#[derive(Debug, Clone)]
+pub struct ImagePreviewUpdate {
+    pub path: PathBuf,
+    pub preview: PreviewDocument,
+}
+
+pub struct ImagePreviewWorker {
+    request_tx: Option<Sender<(PathBuf, u16)>>,
+    update_rx: Receiver<ImagePreviewUpdate>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl ImagePreviewWorker {
+    pub fn spawn() -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<(PathBuf, u16)>();
+        let (update_tx, update_rx) = mpsc::channel::<ImagePreviewUpdate>();
+
+        let join_handle = thread::spawn(move || {
+            while let Ok(mut request) = request_rx.recv() {
+                while let Ok(next_request) = request_rx.try_recv() {
+                    request = next_request;
+                }
+
+                let preview = load_image_preview_for_width(&request.0, request.1);
+                if update_tx
+                    .send(ImagePreviewUpdate {
+                        path: request.0,
+                        preview,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        Self {
+            request_tx: Some(request_tx),
+            update_rx,
+            join_handle: Some(join_handle),
+        }
+    }
+
+    pub fn request(&self, path: PathBuf, target_width: u16) -> bool {
+        self.request_tx
+            .as_ref()
+            .is_some_and(|tx| tx.send((path, target_width)).is_ok())
+    }
+
+    pub fn latest_update(&self) -> Option<ImagePreviewUpdate> {
+        let mut latest = None;
+        loop {
+            match self.update_rx.try_recv() {
+                Ok(update) => latest = Some(update),
+                Err(TryRecvError::Empty) => return latest,
+                Err(TryRecvError::Disconnected) => return latest,
+            }
+        }
+    }
+}
+
+impl Drop for ImagePreviewWorker {
+    fn drop(&mut self) {
+        self.request_tx.take();
+        if let Some(handle) = self.join_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
 fn is_probably_text(bytes: &[u8]) -> bool {
     !bytes.iter().take(BINARY_SAMPLE).any(|b| *b == 0)
@@ -82,13 +157,6 @@ fn is_supported_image_format(format: ImageFormat) -> bool {
             | ImageFormat::Pnm
             | ImageFormat::Tga
     )
-}
-
-fn try_render_image_ascii_preview(
-    path: &Path,
-    data: &[u8],
-) -> Option<(String, Vec<StyledPreviewLine>)> {
-    try_render_image_ascii_preview_with_width(path, data, None)
 }
 
 fn try_render_image_ascii_preview_with_width(
@@ -172,6 +240,42 @@ fn render_image_ascii_preview(
     (output, styled_lines)
 }
 
+fn read_file_with_limit(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    let mut data = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut data)?;
+    Ok(data)
+}
+
+fn read_text_preview_bytes(path: &Path, max_bytes: usize) -> std::io::Result<(Vec<u8>, bool)> {
+    let limit = max_bytes.min(TEXT_PREVIEW_READ_LIMIT);
+    let mut data = read_file_with_limit(path, limit)?;
+    let truncated = data.len() > limit;
+    if truncated {
+        data.truncate(limit);
+    }
+    Ok((data, truncated))
+}
+
+fn read_image_preview_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > IMAGE_PREVIEW_READ_LIMIT as u64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Image preview skipped for large file.",
+        ));
+    }
+
+    let data = read_file_with_limit(path, IMAGE_PREVIEW_READ_LIMIT)?;
+    if data.len() > IMAGE_PREVIEW_READ_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Image preview skipped for large file.",
+        ));
+    }
+    Ok(data)
+}
+
 fn enhanced_terminal_colors(pixel: [u8; 4]) -> (Color, Color) {
     let alpha = pixel[3] as f32 / 255.0;
     let base = [
@@ -246,8 +350,39 @@ pub fn render_image_preview_for_width(
     path: &Path,
     target_width: u16,
 ) -> Option<(String, Vec<StyledPreviewLine>)> {
-    let data = fs::read(path).ok()?;
+    let data = read_image_preview_bytes(path).ok()?;
     try_render_image_ascii_preview_with_width(path, &data, Some(target_width))
+}
+
+pub fn load_image_preview_for_width(path: &Path, target_width: u16) -> PreviewDocument {
+    let mut doc = PreviewDocument {
+        source_path: PathBuf::from(path),
+        load_state: LoadState::Loading,
+        content_type: ContentType::PlainText,
+        ..PreviewDocument::default()
+    };
+
+    let Ok(data) = read_image_preview_bytes(path) else {
+        doc.load_state = LoadState::Error;
+        doc.error_message = Some("Cannot read image preview.".to_string());
+        return doc;
+    };
+
+    let Some((ascii_preview, styled_lines)) =
+        try_render_image_ascii_preview_with_width(path, &data, Some(target_width))
+    else {
+        doc.load_state = LoadState::Error;
+        doc.error_message = Some("Cannot decode image preview.".to_string());
+        return doc;
+    };
+
+    doc.load_state = LoadState::Ready;
+    doc.content_type = ContentType::PlainText;
+    doc.image_preview = true;
+    doc.image_preview_pending = false;
+    doc.content_excerpt = ascii_preview;
+    doc.styled_lines = styled_lines;
+    doc
 }
 
 pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> PreviewDocument {
@@ -267,21 +402,15 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
         error_message: None,
     };
 
-    let Ok(data) = fs::read(path) else {
+    if is_supported_image_path(path) {
+        return load_image_preview_for_width(path, IMAGE_PREVIEW_MAX_WIDTH as u16);
+    }
+
+    let Ok((data, truncated)) = read_text_preview_bytes(path, max_bytes) else {
         doc.load_state = LoadState::Error;
         doc.error_message = Some("Cannot read file (permission denied or missing).".to_string());
         return doc;
     };
-
-    if let Some((ascii_preview, styled_lines)) = try_render_image_ascii_preview(path, &data) {
-        doc.load_state = LoadState::Ready;
-        doc.content_type = ContentType::PlainText;
-        doc.image_preview = true;
-        doc.image_preview_pending = false;
-        doc.content_excerpt = ascii_preview;
-        doc.styled_lines = styled_lines;
-        return doc;
-    }
 
     if !is_probably_text(&data) {
         doc.load_state = LoadState::Binary;
@@ -290,11 +419,9 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
         return doc;
     }
 
-    let truncated = data.len() > max_bytes;
-    let clip = if truncated { &data[..max_bytes] } else { &data };
-    let (content, decode_uncertain) = match std::str::from_utf8(clip) {
+    let (content, decode_uncertain) = match std::str::from_utf8(&data) {
         Ok(s) => (s.to_string(), false),
-        Err(_) => (String::from_utf8_lossy(clip).into_owned(), true),
+        Err(_) => (String::from_utf8_lossy(&data).into_owned(), true),
     };
     let normalized_content = normalize_line_endings(&content);
     let safe_content = sanitize_terminal_control_chars(&normalized_content);
@@ -306,7 +433,7 @@ pub fn load_preview(path: &Path, max_bytes: usize, ctx: &HighlightContext) -> Pr
             styled_lines: Vec::new(),
             fallback_reason: Some(PreviewFallbackReason::DecodeUncertain),
         }
-    } else if clip.len() > HIGHLIGHT_MAX_BYTES {
+    } else if data.len() > HIGHLIGHT_MAX_BYTES {
         HighlightRenderResult {
             rendered_text: safe_content.clone(),
             content_type: ContentType::PlainText,

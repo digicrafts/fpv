@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitFileStatus {
@@ -42,6 +44,77 @@ impl GitRepoStatus {
             .values()
             .filter(|status| **status != GitFileStatus::Ignored)
             .count()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GitStatusUpdate {
+    pub requested_path: PathBuf,
+    pub status: Option<GitRepoStatus>,
+}
+
+pub struct GitStatusWorker {
+    request_tx: Option<Sender<PathBuf>>,
+    update_rx: Receiver<GitStatusUpdate>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl GitStatusWorker {
+    pub fn spawn() -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<PathBuf>();
+        let (update_tx, update_rx) = mpsc::channel::<GitStatusUpdate>();
+
+        let join_handle = thread::spawn(move || {
+            while let Ok(mut path) = request_rx.recv() {
+                while let Ok(next_path) = request_rx.try_recv() {
+                    path = next_path;
+                }
+
+                let status = git_repo_status_for_path(&path);
+                if update_tx
+                    .send(GitStatusUpdate {
+                        requested_path: path,
+                        status,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        Self {
+            request_tx: Some(request_tx),
+            update_rx,
+            join_handle: Some(join_handle),
+        }
+    }
+
+    pub fn request(&self, path: PathBuf) -> bool {
+        self.request_tx
+            .as_ref()
+            .is_some_and(|tx| tx.send(path).is_ok())
+    }
+
+    pub fn latest_update(&self) -> Option<GitStatusUpdate> {
+        let mut latest = None;
+
+        loop {
+            match self.update_rx.try_recv() {
+                Ok(update) => latest = Some(update),
+                Err(TryRecvError::Empty) => return latest,
+                Err(TryRecvError::Disconnected) => return latest,
+            }
+        }
+    }
+}
+
+impl Drop for GitStatusWorker {
+    fn drop(&mut self) {
+        self.request_tx.take();
+        if let Some(handle) = self.join_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 

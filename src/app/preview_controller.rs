@@ -3,9 +3,7 @@ use crate::app::state::{
     PreviewLineChange, SessionState, StyledPreviewLine, StyledPreviewSegment, TreeNode,
 };
 use crate::fs::current_dir::{list_current_directory_with_visibility, selected_entry_metadata};
-use crate::fs::git::{
-    git_head_content_for_file, git_repo_status_for_path, GitFileStatus, GitRepoStatus,
-};
+use crate::fs::git::{git_head_content_for_file, GitFileStatus, GitRepoStatus};
 use crate::fs::preview::{is_supported_image_path, load_preview};
 use crate::highlight::render::render_with_highlight;
 use crate::highlight::syntax::HighlightContext;
@@ -16,6 +14,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 2000;
+const DIFF_MAX_TOTAL_LINES: usize = 4_000;
+const DIFF_MAX_EDIT_DISTANCE: usize = 1_024;
+const DIFF_CACHE_MAX_LINES: usize = 8_000;
+const DIFF_CACHE_MAX_BYTES: usize = 512 * 1024;
 pub const IMAGE_PREVIEW_DELAY: Duration = Duration::from_secs(1);
 
 fn directory_entry_label(node: &TreeNode) -> String {
@@ -76,19 +78,21 @@ fn format_git_label(status: GitFileStatus) -> &'static str {
     }
 }
 
-fn directory_preview(path: &Path, show_hidden: bool) -> PreviewDocument {
+fn directory_preview(
+    path: &Path,
+    show_hidden: bool,
+    git_status: Option<&GitRepoStatus>,
+) -> PreviewDocument {
     match list_current_directory_with_visibility(path, DIRECTORY_PREVIEW_MAX_ENTRIES, show_hidden) {
         Ok(entries) => {
-            let git = git_repo_status_for_path(path);
             let mut lines = Vec::with_capacity(entries.len().saturating_add(1));
             if entries.is_empty() {
                 lines.push("(empty directory)".to_string());
             } else {
                 for node in &entries {
                     let name = directory_entry_label(node);
-                    if let Some(git_status) = git
-                        .as_ref()
-                        .and_then(|g| git_status_for_entry(node, path, g))
+                    if let Some(git_status) = git_status
+                        .and_then(|repo_status| git_status_for_entry(node, path, repo_status))
                     {
                         lines.push(format!("{} {}", format_git_label(git_status), name));
                     } else {
@@ -166,18 +170,107 @@ fn apply_modifier_to_line(
         .collect()
 }
 
-fn lcs_table(left: &[String], right: &[String]) -> Vec<Vec<usize>> {
-    let mut table = vec![vec![0; right.len() + 1]; left.len() + 1];
-    for i in (0..left.len()).rev() {
-        for j in (0..right.len()).rev() {
-            table[i][j] = if left[i] == right[j] {
-                table[i + 1][j + 1] + 1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffOp {
+    Equal(usize, usize),
+    Delete(usize),
+    Insert(usize),
+}
+
+fn myers_diff(left: &[String], right: &[String]) -> Option<Vec<DiffOp>> {
+    let n = left.len();
+    let m = right.len();
+    if n + m > DIFF_MAX_TOTAL_LINES {
+        return None;
+    }
+
+    let max = n + m;
+    let offset = max as isize;
+    let mut v = vec![0isize; 2 * max + 1];
+    let mut trace = Vec::new();
+
+    for d in 0..=max {
+        if d > DIFF_MAX_EDIT_DISTANCE {
+            return None;
+        }
+        for k in (-(d as isize)..=d as isize).step_by(2) {
+            let index = (k + offset) as usize;
+            let x = if k == -(d as isize)
+                || (k != d as isize && v[index.saturating_sub(1)] < v[index + 1])
+            {
+                v[index + 1]
             } else {
-                table[i + 1][j].max(table[i][j + 1])
+                v[index.saturating_sub(1)] + 1
             };
+            let mut x = x;
+            let mut y = x - k;
+
+            while x < n as isize && y < m as isize && left[x as usize] == right[y as usize] {
+                x += 1;
+                y += 1;
+            }
+            v[index] = x;
+
+            if x >= n as isize && y >= m as isize {
+                trace.push(v.clone());
+                return Some(backtrack_myers(&trace, left, right, offset));
+            }
+        }
+        trace.push(v.clone());
+    }
+
+    None
+}
+
+fn backtrack_myers(
+    trace: &[Vec<isize>],
+    left: &[String],
+    right: &[String],
+    offset: isize,
+) -> Vec<DiffOp> {
+    let mut x = left.len() as isize;
+    let mut y = right.len() as isize;
+    let mut ops = Vec::new();
+
+    for d in (1..trace.len()).rev() {
+        let v = &trace[d - 1];
+        let k = x - y;
+        let d = d as isize;
+        let prev_k = if k == -d
+            || (k != d
+                && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
+        {
+            k + 1
+        } else {
+            k - 1
+        };
+
+        let prev_x = v[(prev_k + offset) as usize];
+        let prev_y = prev_x - prev_k;
+
+        while x > prev_x && y > prev_y {
+            x -= 1;
+            y -= 1;
+            ops.push(DiffOp::Equal(x as usize, y as usize));
+        }
+
+        if x == prev_x {
+            y -= 1;
+            ops.push(DiffOp::Insert(y as usize));
+        } else {
+            x -= 1;
+            ops.push(DiffOp::Delete(x as usize));
         }
     }
-    table
+
+    while x > 0 && y > 0 {
+        x -= 1;
+        y -= 1;
+        ops.push(DiffOp::Equal(x as usize, y as usize));
+    }
+
+    ops.reverse();
+    ops
 }
 
 fn preview_diff_cache_key(path: &Path, current_doc: &PreviewDocument) -> PreviewDiffCacheKey {
@@ -191,6 +284,10 @@ fn preview_diff_cache_key(path: &Path, current_doc: &PreviewDocument) -> Preview
         language_id: current_doc.language_id.clone(),
         truncated: current_doc.truncated,
     }
+}
+
+fn should_cache_diff(doc: &PreviewDocument) -> bool {
+    doc.styled_lines.len() <= DIFF_CACHE_MAX_LINES && doc.content_excerpt.len() <= DIFF_CACHE_MAX_BYTES
 }
 
 fn diff_preview(
@@ -212,7 +309,7 @@ fn diff_preview(
     }
 
     let Some(base_content) = git_head_content_for_file(path) else {
-        state.preview_diff_cache = Some(PreviewDiffCache {
+        state.preview_diff_cache = should_cache_diff(&current_doc).then(|| PreviewDiffCache {
             key: cache_key,
             merged_doc: current_doc.clone(),
         });
@@ -232,48 +329,48 @@ fn diff_preview(
     let base_text_lines = styled_lines_to_text_lines(&base_lines);
 
     if base_text_lines == current_text_lines {
-        state.preview_diff_cache = Some(PreviewDiffCache {
+        state.preview_diff_cache = should_cache_diff(&current_doc).then(|| PreviewDiffCache {
             key: cache_key,
             merged_doc: current_doc.clone(),
         });
         return current_doc;
     }
 
-    let table = lcs_table(&base_text_lines, &current_text_lines);
-    let mut i = 0usize;
-    let mut j = 0usize;
+    let Some(ops) = myers_diff(&base_text_lines, &current_text_lines) else {
+        state.preview_diff_cache = should_cache_diff(&current_doc).then(|| PreviewDiffCache {
+            key: cache_key,
+            merged_doc: current_doc.clone(),
+        });
+        return current_doc;
+    };
+
     let mut merged_lines = Vec::new();
     let mut display_line_numbers = Vec::new();
     let mut line_changes = Vec::new();
 
-    while i < base_lines.len() || j < current_lines.len() {
-        if i < base_lines.len()
-            && j < current_lines.len()
-            && base_text_lines[i] == current_text_lines[j]
-        {
-            merged_lines.push(current_lines[j].clone());
-            display_line_numbers.push(Some(j + 1));
-            line_changes.push(None);
-            i += 1;
-            j += 1;
-        } else if j < current_lines.len()
-            && (i == base_lines.len() || table[i][j + 1] > table[i + 1][j])
-        {
-            merged_lines.push(apply_modifier_to_line(
-                &current_lines[j],
-                PreviewLineChange::Added,
-            ));
-            display_line_numbers.push(Some(j + 1));
-            line_changes.push(Some(PreviewLineChange::Added));
-            j += 1;
-        } else if i < base_lines.len() {
-            merged_lines.push(apply_modifier_to_line(
-                &base_lines[i],
-                PreviewLineChange::Deleted,
-            ));
-            display_line_numbers.push(Some(i + 1));
-            line_changes.push(Some(PreviewLineChange::Deleted));
-            i += 1;
+    for op in ops {
+        match op {
+            DiffOp::Equal(_, current_index) => {
+                merged_lines.push(current_lines[current_index].clone());
+                display_line_numbers.push(Some(current_index + 1));
+                line_changes.push(None);
+            }
+            DiffOp::Insert(current_index) => {
+                merged_lines.push(apply_modifier_to_line(
+                    &current_lines[current_index],
+                    PreviewLineChange::Added,
+                ));
+                display_line_numbers.push(Some(current_index + 1));
+                line_changes.push(Some(PreviewLineChange::Added));
+            }
+            DiffOp::Delete(base_index) => {
+                merged_lines.push(apply_modifier_to_line(
+                    &base_lines[base_index],
+                    PreviewLineChange::Deleted,
+                ));
+                display_line_numbers.push(Some(base_index + 1));
+                line_changes.push(Some(PreviewLineChange::Deleted));
+            }
         }
     }
 
@@ -292,7 +389,7 @@ fn diff_preview(
         truncated: current_doc.truncated,
         error_message: None,
     };
-    state.preview_diff_cache = Some(PreviewDiffCache {
+    state.preview_diff_cache = should_cache_diff(&merged_doc).then(|| PreviewDiffCache {
         key: cache_key,
         merged_doc: merged_doc.clone(),
     });
@@ -323,7 +420,7 @@ pub fn refresh_preview(
         state.selected_metadata = selected_entry_metadata(node);
         if node.node_type == NodeType::Directory {
             state.preview_diff_cache = None;
-            directory_preview(&node.path, state.show_hidden)
+            directory_preview(&node.path, state.show_hidden, state.git_status.as_ref())
         } else if is_supported_image_path(&node.path)
             && state.selected_changed_at.elapsed() < IMAGE_PREVIEW_DELAY
         {
@@ -340,7 +437,12 @@ pub fn refresh_preview(
         state.selected_metadata = Default::default();
         PreviewDocument {
             load_state: LoadState::Error,
-            error_message: Some("No selection".to_string()),
+            error_message: Some(
+                state
+                    .current_dir_error
+                    .clone()
+                    .unwrap_or_else(|| "No selection".to_string()),
+            ),
             ..PreviewDocument::default()
         }
     };

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.7] - 2026-03-09
+
+### Changed
+
+- Improved responsiveness by moving slow Git status and image preview work off the UI render path and into background workers.
+- Stabilized preview interaction under high-frequency input, including wheel and key reversal behavior and bounded scroll processing at pane edges.
+- Hardened large file behavior with explicit limits for text/image previews, diff generation, and preview caching.
+
 ## [0.1.6] - 2026-03-08
 
 ### Added

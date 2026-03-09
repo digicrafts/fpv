@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.8] - 2026-03-09
+
+### Changed
+
+- Release version updated for packaging and workflow fixes.
+
 ## [0.1.7] - 2026-03-09
 
 ### Changed

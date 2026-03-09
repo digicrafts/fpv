@@ -6,7 +6,7 @@
 
 A minimal, keyboard-first TUI file previewer for browsing directories and viewing code with syntax highlighting in the terminal.
 
-Current release: `v0.1.7`
+Current release: `v0.1.8`
 
 ---
 

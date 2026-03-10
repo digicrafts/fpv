@@ -168,6 +168,21 @@ fn preview_scrollbar_target_row(
     Some(target_row.min(max_scroll))
 }
 
+fn handle_preview_scrollbar_drag(
+    state: &mut SessionState,
+    mouse: MouseEvent,
+    total_lines: usize,
+) -> bool {
+    let Some(target_row) = preview_scrollbar_target_row(state, mouse, total_lines) else {
+        return false;
+    };
+    if target_row == state.preview_scroll_row {
+        return false;
+    }
+    state.preview_scroll_row = target_row;
+    true
+}
+
 fn preview_viewport_cols(state: &SessionState) -> usize {
     let (_, _, inner_w, _) = state.preview_inner_rect;
     (inner_w as usize).saturating_sub(state.preview_line_number_cols)
@@ -775,7 +790,7 @@ pub fn process_once(
                 }
             }
         }
-        Event::Mouse(mouse) => {
+    Event::Mouse(mouse) => {
             if state.help_overlay_visible {
                 return Ok((false, false, false));
             }
@@ -785,12 +800,14 @@ pub fn process_once(
 
             if !state.divider_drag_active {
                 state.preview_copy_indicator = false;
+                let rendered_total_lines = rendered_preview_total_lines(state, preview_total_lines);
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
                         // If we were selecting, finalize the previous selection
                         if state.preview_selecting {
                             finalize_selection(state, preview_doc);
                         }
+                        state.preview_scrollbar_dragging = false;
 
                         let mut tree_clicked = false;
                         if let Some(index) = tree_index_for_click(state, mouse, nodes.len()) {
@@ -814,8 +831,6 @@ pub fn process_once(
                             }
                         }
 
-                        let rendered_total_lines =
-                            rendered_preview_total_lines(state, preview_total_lines);
                         if !tree_clicked {
                             if let Some(target_row) =
                                 preview_scrollbar_target_row(state, mouse, rendered_total_lines)
@@ -824,6 +839,7 @@ pub fn process_once(
                                 state.preview_selection = None;
                                 state.preview_selecting = false;
                                 state.preview_copying_indicator = false;
+                                state.preview_scrollbar_dragging = true;
                             } else if in_preview_panel(state, mouse) {
                                 let pos = mouse_to_content_position(state, mouse);
                                 state.preview_selection = Some(PreviewSelection {
@@ -838,6 +854,13 @@ pub fn process_once(
                             }
                         }
                     }
+                    MouseEventKind::Drag(MouseButton::Left) if state.preview_scrollbar_dragging => {
+                        let _ = handle_preview_scrollbar_drag(
+                            state,
+                            mouse,
+                            rendered_total_lines,
+                        );
+                    }
                     MouseEventKind::Drag(MouseButton::Left) if state.preview_selecting => {
                         let pos = mouse_to_content_position(state, mouse);
                         if let Some(sel) = &mut state.preview_selection {
@@ -845,6 +868,9 @@ pub fn process_once(
                         }
                     }
                     // Some terminals send Moved instead of Drag during button hold
+                    MouseEventKind::Moved if state.preview_scrollbar_dragging => {
+                        let _ = handle_preview_scrollbar_drag(state, mouse, rendered_total_lines);
+                    }
                     MouseEventKind::Moved if state.preview_selecting => {
                         let pos = mouse_to_content_position(state, mouse);
                         if let Some(sel) = &mut state.preview_selection {
@@ -853,6 +879,9 @@ pub fn process_once(
                     }
                     MouseEventKind::Up(MouseButton::Left) if state.preview_selecting => {
                         finalize_selection(state, preview_doc);
+                    }
+                    MouseEventKind::Up(MouseButton::Left) if state.preview_scrollbar_dragging => {
+                        state.preview_scrollbar_dragging = false;
                     }
                     _ => {}
                 }
@@ -930,7 +959,8 @@ pub fn process_once(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_mouse_resize, preview_scrollbar_target_row, tree_index_for_click, tree_panel_area,
+        apply_mouse_resize, handle_preview_scrollbar_drag, preview_scrollbar_target_row,
+        tree_index_for_click, tree_panel_area,
     };
     use crate::app::state::{PreviewRenderCache, PreviewRenderCacheKey, SessionState};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -986,6 +1016,24 @@ mod tests {
         };
 
         assert_eq!(preview_scrollbar_target_row(&state, click, 8), None);
+    }
+
+    #[test]
+    fn preview_scrollbar_drag_moves_scroll_row() {
+        let mut state = SessionState::new(PathBuf::from("."));
+        state.preview_inner_rect = (40, 2, 30, 10);
+        state.preview_scroll_row = 0;
+        state.preview_scrollbar_dragging = true;
+
+        let drag = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 69,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        assert_eq!(handle_preview_scrollbar_drag(&mut state, drag, 100), true);
+        assert_eq!(state.preview_scroll_row, 60);
     }
 
     #[test]

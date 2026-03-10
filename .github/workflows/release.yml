@@ -297,4 +297,9 @@ jobs:
             TARGET_REPO="${CLOUDSMITH_REPO}/${TARGET_DISTRIBUTION}/${TARGET_RELEASE}"
           fi
           echo "Publishing to Cloudsmith repository: ${TARGET_REPO}"
-          cloudsmith push deb "${TARGET_REPO}" dist/debian-*/*.deb --republish
+          shopt -s nullglob
+          for pkg in dist/debian-*/*.deb; do
+            if [[ -f "${pkg}" ]]; then
+              cloudsmith push deb --republish "${TARGET_REPO}" "${pkg}"
+            fi
+          done

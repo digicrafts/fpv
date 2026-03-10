@@ -1,5 +1,5 @@
 use crate::app::state::{
-    ContentType, LoadState, PreviewDocument, PreviewFallbackReason, PreviewLineChange,
+    ContentType, LoadState, PreviewDocument, PreviewLineChange,
     PreviewRenderCache, PreviewRenderCacheKey, PreviewSelection, SessionState,
 };
 use crate::config::load::ThemeProfile;
@@ -32,6 +32,49 @@ fn line_count(text: &str) -> usize {
     text.split('\n').count().max(1)
 }
 
+fn preview_scroll_position_text(
+    state: &SessionState,
+    total_lines: usize,
+) -> String {
+    let total = total_lines.max(1);
+    let current = state.preview_scroll_row.saturating_add(1).min(total);
+    format!("[{current}:{total}]")
+}
+
+fn preview_border_bottom_line(
+    state: &SessionState,
+    total_lines: usize,
+    width: usize,
+) -> String {
+    let left = preview_scroll_position_text(state, total_lines);
+    if width <= left.len() {
+        return left.chars().take(width).collect();
+    }
+
+    let right = preview_border_metadata_for_state(state, width.saturating_sub(left.len() + 1));
+    let mut line = left;
+    line.push(' ');
+    let right_width = width.saturating_sub(line.len());
+
+    if right_width == 0 {
+        return line.chars().take(width).collect();
+    }
+
+    let right_with_pad = if right.is_empty() {
+        String::new()
+    } else {
+        let gap = right_width.saturating_sub(right.len());
+        format!("{}{}", " ".repeat(gap), right)
+    };
+    line.push_str(&right_with_pad);
+
+    if line.len() > width {
+        line.chars().take(width).collect()
+    } else {
+        line
+    }
+}
+
 fn plain_text_for_doc(doc: &PreviewDocument) -> String {
     match doc.load_state {
         LoadState::Error | LoadState::Binary => doc
@@ -39,19 +82,7 @@ fn plain_text_for_doc(doc: &PreviewDocument) -> String {
             .clone()
             .unwrap_or_else(|| "Unable to render preview".to_string()),
         _ => {
-            let mut content = doc.content_excerpt.clone();
-            if matches!(doc.content_type, ContentType::PlainText) {
-                if let Some(reason) = &doc.fallback_reason {
-                    let reason_text = match reason {
-                        PreviewFallbackReason::UnsupportedExtension => "unsupported-extension",
-                        PreviewFallbackReason::EngineFailure => "highlight-failed",
-                        PreviewFallbackReason::TooLarge => "large-file-guard",
-                        PreviewFallbackReason::DecodeUncertain => "decode-uncertain",
-                    };
-                    content = format!("[plain-text fallback: {reason_text}]\n{content}");
-                }
-            }
-            content
+            doc.content_excerpt.clone()
         }
     }
 }
@@ -764,14 +795,18 @@ pub fn draw_preview(
 ) {
     frame.render_widget(Clear, area);
     let title = preview_title_for_state(state);
-    let metadata_line =
-        preview_border_metadata_for_state(state, area.width.saturating_sub(2) as usize);
+    let total_lines = preview_total_lines(doc);
+    let metadata_line = preview_border_bottom_line(
+        state,
+        total_lines,
+        area.width.saturating_sub(2) as usize,
+    );
     let block = Block::default()
         .title(
             Line::from(vec![Span::raw(" "), Span::raw(title), Span::raw(" ")])
                 .alignment(Alignment::Right),
         )
-        .title_bottom(Line::from(metadata_line).alignment(Alignment::Right))
+        .title_bottom(Line::from(metadata_line).alignment(Alignment::Left))
         .borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);

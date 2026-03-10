@@ -557,7 +557,7 @@ fn preview_total_lines_counts_fallback_header_and_content() {
         fallback_reason: Some(PreviewFallbackReason::UnsupportedExtension),
         ..fpv::app::state::PreviewDocument::default()
     };
-    assert_eq!(preview_total_lines(&doc), 3);
+    assert_eq!(preview_total_lines(&doc), 2);
 
     doc.fallback_reason = None;
     assert_eq!(preview_total_lines(&doc), 2);

@@ -235,6 +235,7 @@ pub struct SessionState {
     pub preview_scroll_col: usize,
     pub preview_selection: Option<PreviewSelection>,
     pub preview_selecting: bool,
+    pub preview_scrollbar_dragging: bool,
     pub preview_inner_rect: (u16, u16, u16, u16),
     pub preview_line_number_cols: usize,
     pub preview_render_epoch: u64,
@@ -282,6 +283,7 @@ impl SessionState {
             preview_scroll_col: 0,
             preview_selection: None,
             preview_selecting: false,
+            preview_scrollbar_dragging: false,
             preview_inner_rect: (0, 0, 0, 0),
             preview_line_number_cols: 0,
             preview_render_epoch: 0,
@@ -316,6 +318,7 @@ impl SessionState {
         self.preview_scroll_col = 0;
         self.preview_selection = None;
         self.preview_selecting = false;
+        self.preview_scrollbar_dragging = false;
     }
 
     pub fn clamp_preview_scroll(&mut self, total_lines: usize, viewport_rows: usize) {

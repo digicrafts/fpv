@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.9] - 2026-03-10
+
+### Changed
+
+- Improved preview UX for scrollbar interactions by adding click-and-drag scrolling and visible scroll-position metadata in the preview border.
+- Removed plain-text fallback notice text from rendered previews to keep content display clean.
+- Fixed Cloudsmith apt publish flow to avoid malformed CLI argument ordering and support iterating multiple `.deb` artifacts.
+
 ## [0.1.8] - 2026-03-09
 
 ### Changed

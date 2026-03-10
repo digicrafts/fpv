@@ -32,6 +32,13 @@ brew tap digicrafts/tap
 brew install fpv
 ```
 
+### Ubuntu(APT)
+
+```bash
+curl -1sLf 'https://dl.cloudsmith.io/public/digicrafts/fpv/setup.deb.sh' | sudo -E bash
+sudo apt install fpv
+```
+
 ### From source
 
 See [Build from source](#build-from-source) below.

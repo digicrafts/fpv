@@ -7,7 +7,8 @@
 **fpv is the ultra-fast terminal-native file cockpit for code discovery.**  
 Explore folders, preview files, and review diffs instantly without leaving your terminal workflow.
 
-Built for speed and clarity, fpv delivers near-instant preview updates with an intentionally minimal UI: just a focused tree and preview, keyboard-first controls, and zero extra clutter.
+Built for speed and clarity, fpv delivers near-instant preview updates with an intentionally minimal UI: just a focused tree and preview, keyboard-first controls, and zero extra clutter.  
+Under the hood, fpv is powered by [Ratatui](https://github.com/ratatui-org/ratatui) for responsive, terminal-native rendering.
 
 Current release: `v0.1.10`
 
@@ -26,6 +27,7 @@ Current release: `v0.1.10`
 - **Visual file previews** — See PNG, JPEG, and GIF content as compact ASCII art directly in the terminal, including proportional scaling
 - **Fully customizable** — Tune key bindings and theme behavior with a simple TOML configuration
 - **Reliable fallbacks** — Safe plain-text rendering for binaries or files that cannot be highlighted
+- **Ratatui-powered** — Smooth, low-latency interface updates built on the Ratatui widget/rendering ecosystem
 
 ## Installation
 
@@ -141,6 +143,14 @@ Other files are shown as plain text or with a safe fallback.
 | Theme refinement and usability improvements | [ ] |
 | Plugin architecture for extensible preview features | [ ] |
 | Git graph view for commit history context | [ ] |
+
+## Credits
+
+fpv is built on the shoulders of open-source infrastructure:
+
+- [Ratatui](https://github.com/ratatui-org/ratatui) — terminal UI framework that powers the full-screen rendering and interaction model.
+- [Tree-sitter](https://tree-sitter.github.io/tree-sitter/) — fast language parsing for syntax highlighting support.
+- The Rust terminal tooling and open-source contributors behind the ecosystem.
 
 ## License
 

@@ -297,8 +297,64 @@ pub fn run() -> Result<()> {
             }
         }
 
+        let previous_path = state.current_path.clone();
         let frame_size = terminal.size()?;
         state.normalize_preview_width(frame_size.width);
+        let preview_viewport_rows = frame_size.height.saturating_sub(4) as usize;
+        let total_preview_lines = preview_total_lines(&preview);
+        state.clamp_preview_scroll(total_preview_lines, preview_viewport_rows);
+        let (should_quit, should_refresh_preview, should_refresh_tree) = process_once(
+            &mut state,
+            &mut nodes,
+            &bindings,
+            total_preview_lines,
+            preview_viewport_rows,
+            &preview,
+        )?;
+        if should_quit {
+            break;
+        }
+        if should_refresh_tree {
+            let prev_selected = state.selected_path.clone();
+            match list_current_directory_with_visibility(
+                &state.current_path,
+                2000,
+                state.show_hidden,
+            ) {
+                Ok(entries) => {
+                    apply_directory_entries(&mut state, &mut nodes, entries, Some(&prev_selected));
+                }
+                Err(error) => {
+                    let message = apply_directory_error(&mut state, &mut nodes, &error);
+                    state.status_message = format_status_with_path(&message, &state.current_path);
+                }
+            }
+            request_git_status_refresh(
+                &git_worker,
+                &mut state,
+                &mut last_requested_git_path,
+                true,
+            );
+            last_dir_mtime = dir_mtime(&state.current_path);
+            preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
+            pending_image_path = None;
+        } else {
+            if state.current_path != previous_path {
+                request_git_status_refresh(
+                    &git_worker,
+                    &mut state,
+                    &mut last_requested_git_path,
+                    true,
+                );
+                last_dir_mtime = dir_mtime(&state.current_path);
+            }
+            if should_refresh_preview {
+                preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
+                pending_image_path = None;
+            }
+        }
+
+        let frame_size = terminal.size()?;
         let preview_viewport_rows = frame_size.height.saturating_sub(4) as usize;
         let total_preview_lines = preview_total_lines(&preview);
         state.clamp_preview_scroll(total_preview_lines, preview_viewport_rows);
@@ -357,58 +413,6 @@ pub fn run() -> Result<()> {
                 f.render_widget(help, modal);
             }
         })?;
-
-        let previous_path = state.current_path.clone();
-        let (should_quit, should_refresh_preview, should_refresh_tree) = process_once(
-            &mut state,
-            &mut nodes,
-            &bindings,
-            total_preview_lines,
-            preview_viewport_rows,
-            &preview,
-        )?;
-        if should_quit {
-            break;
-        }
-        if should_refresh_tree {
-            let prev_selected = state.selected_path.clone();
-            match list_current_directory_with_visibility(
-                &state.current_path,
-                2000,
-                state.show_hidden,
-            ) {
-                Ok(entries) => {
-                    apply_directory_entries(&mut state, &mut nodes, entries, Some(&prev_selected));
-                }
-                Err(error) => {
-                    let message = apply_directory_error(&mut state, &mut nodes, &error);
-                    state.status_message = format_status_with_path(&message, &state.current_path);
-                }
-            }
-            request_git_status_refresh(
-                &git_worker,
-                &mut state,
-                &mut last_requested_git_path,
-                true,
-            );
-            last_dir_mtime = dir_mtime(&state.current_path);
-            preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
-            pending_image_path = None;
-        } else {
-            if state.current_path != previous_path {
-                request_git_status_refresh(
-                    &git_worker,
-                    &mut state,
-                    &mut last_requested_git_path,
-                    true,
-                );
-                last_dir_mtime = dir_mtime(&state.current_path);
-            }
-            if should_refresh_preview {
-                preview = refresh_preview(&mut state, &nodes, &highlight, 1024 * 1024);
-                pending_image_path = None;
-            }
-        }
     }
 
     disable_raw_mode()?;

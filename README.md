@@ -4,24 +4,28 @@
 [![GitHub downloads](https://img.shields.io/github/downloads/digicrafts/fpv/total)](https://github.com/digicrafts/fpv/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
-A minimal, keyboard-first TUI file previewer for browsing directories and viewing code with syntax highlighting in the terminal.
+**fpv is the ultra-fast terminal-native file cockpit for code discovery.**  
+Explore folders, preview files, and review diffs instantly without leaving your terminal workflow.
 
-Current release: `v0.1.9`
+Built for speed and clarity, fpv delivers near-instant preview updates with an intentionally minimal UI: just a focused tree and preview, keyboard-first controls, and zero extra clutter.
+
+Current release: `v0.1.10`
 
 ---
 
-<img width="2282" height="1600" alt="image" src="https://github.com/user-attachments/assets/4c7e0485-0b64-41db-a745-e069aeb67416" />
-
+![fpv feature overview](assets/fpv.webp)
 
 ## Features
 
-- **Split TUI** — Directory tree on the left, file preview on the right
-- **Syntax highlighting** — Tree-sitter–powered highlighting for many languages (see [Supported file types](#supported-file-types))
-- **Git-aware** — Tree indicators for repository status
-- **Inline diff preview** — toggle git diff mode to see added and deleted lines inline in the highlighted preview, with change markers in the scrollbar
-- **ASCII image preview** — render common image formats such as PNG, JPEG, and GIF as colorized shaded-block previews, scaled to the pane with a short delayed load while navigating
-- **Configurable** — Keybindings and theme via a TOML config file
-- **Safe defaults** — Plain-text or fallback preview for binary or unreadable files
+- **Split-pane power flow** — Keep context with a directory tree on the left and instant file preview on the right
+- **Multi-language syntax highlighting** — Tree-sitter powered rendering for major languages (see [Supported file types](#supported-file-types))
+- **Git-aware navigation** — Spot status and change intent directly in the tree and preview
+- **Instant reload loop** — Navigate quickly with low-latency file switching and stable frame refresh
+- **Minimal interface, maximal signal** — Minimal, focused chrome so diff and code content stay the center of attention
+- **Inline diff-first reviews** — Toggle diff mode to surface added/removed lines inside the preview with visual markers in the scrollbar
+- **Visual file previews** — See PNG, JPEG, and GIF content as compact ASCII art directly in the terminal, including proportional scaling
+- **Fully customizable** — Tune key bindings and theme behavior with a simple TOML configuration
+- **Reliable fallbacks** — Safe plain-text rendering for binaries or files that cannot be highlighted
 
 ## Installation
 
@@ -126,6 +130,17 @@ Syntax highlighting is supported for:
 | Rust       | `rs` |
 
 Other files are shown as plain text or with a safe fallback.
+
+## Roadmap
+
+### Future planning features
+
+| Planned feature | Completed |
+| -------------- | --------- |
+| In-preview search across file content | [ ] |
+| Theme refinement and usability improvements | [ ] |
+| Plugin architecture for extensible preview features | [ ] |
+| Git graph view for commit history context | [ ] |
 
 ## License
 

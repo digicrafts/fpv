@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -266,15 +267,28 @@ fn parse_branch_name(head_line: &str) -> Option<String> {
     }
 }
 
+fn normalized_file_path(file_path: &Path) -> PathBuf {
+    let absolute_path = if file_path.is_absolute() {
+        file_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(file_path))
+            .unwrap_or_else(|| file_path.to_path_buf())
+    };
+    fs::canonicalize(&absolute_path).unwrap_or(absolute_path)
+}
+
 pub fn git_diff_for_file(file_path: &Path) -> Option<String> {
-    let repo_root = git_repo_root(file_path.parent().unwrap_or(file_path))?;
+    let file_path = normalized_file_path(file_path);
+    let repo_root = git_repo_root(file_path.parent().unwrap_or(&file_path))?;
 
     // Try staged diff first, then unstaged
     let output = Command::new("git")
         .arg("-C")
         .arg(&repo_root)
         .args(["diff", "HEAD", "--"])
-        .arg(file_path)
+        .arg(&file_path)
         .output()
         .ok()?;
 
@@ -290,7 +304,7 @@ pub fn git_diff_for_file(file_path: &Path) -> Option<String> {
         .arg("-C")
         .arg(&repo_root)
         .args(["diff", "--no-index", "--", "/dev/null"])
-        .arg(file_path)
+        .arg(&file_path)
         .output()
         .ok()?;
 
@@ -304,7 +318,8 @@ pub fn git_diff_for_file(file_path: &Path) -> Option<String> {
 }
 
 pub fn git_head_content_for_file(file_path: &Path) -> Option<String> {
-    let repo_root = git_repo_root(file_path.parent().unwrap_or(file_path))?;
+    let file_path = normalized_file_path(file_path);
+    let repo_root = git_repo_root(file_path.parent().unwrap_or(&file_path))?;
     let rel_path = file_path.strip_prefix(&repo_root).ok()?;
 
     let exists_in_head = Command::new("git")

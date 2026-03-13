@@ -18,6 +18,8 @@ mod preview_metadata_footer_tests;
 mod preview_mode_tests;
 #[path = "unit/preview_panel_title_tests.rs"]
 mod preview_panel_title_tests;
+#[path = "unit/event_loop_tests.rs"]
+mod event_loop_tests;
 #[path = "unit/refresh_current_directory_tests.rs"]
 mod refresh_current_directory_tests;
 #[path = "unit/root_boundary_tests.rs"]

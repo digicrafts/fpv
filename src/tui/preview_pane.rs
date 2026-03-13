@@ -479,10 +479,14 @@ fn paint_full_row_diff_background(
     inner: ratatui::layout::Rect,
     rendered_row_changes: &[Option<PreviewLineChange>],
     scroll_row: usize,
+    line_number_cols: u16,
 ) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
+
+    let paint_start = inner.x.saturating_add(line_number_cols.min(inner.width));
+    let paint_end = inner.x.saturating_add(inner.width);
 
     let buf = frame.buffer_mut();
     for screen_y in 0..inner.height {
@@ -496,7 +500,7 @@ fn paint_full_row_diff_background(
             continue;
         };
 
-        for screen_x in inner.x..inner.x.saturating_add(inner.width) {
+        for screen_x in paint_start..paint_end {
             let cell = buf.get_mut(screen_x, inner.y + screen_y);
             cell.set_style(cell.style().bg(bg));
         }
@@ -872,7 +876,13 @@ pub fn draw_preview(
     let _ = theme;
     frame.render_widget(Clear, inner);
     frame.render_widget(content_widget, inner);
-    paint_full_row_diff_background(frame, inner, &cache.rendered_row_changes, scroll_row_usize);
+    paint_full_row_diff_background(
+        frame,
+        inner,
+        &cache.rendered_row_changes,
+        scroll_row_usize,
+        cache.line_number_cols as u16,
+    );
     render_scroll_indicator(
         frame,
         inner,
@@ -903,6 +913,9 @@ pub fn draw_preview(
     } else if state.preview_copying_indicator {
         render_overlay_label(frame, inner, " Copying... ", bold_inverted);
     } else if state.preview_diff_mode {
+        if doc.line_changes.iter().all(|change| change.is_none()) {
+            render_overlay_label(frame, inner, " No changes ", bold_inverted);
+        }
         let diff_style = Style::default()
             .fg(Color::Black)
             .bg(Color::Yellow)

@@ -31,7 +31,7 @@ fn diff_mode_toggle_refreshes_preview_in_same_loop_cycle() {
     run_git(&["commit", "-m", "base"]);
     fs::write(&file_path, "line 1\nline 2 changed\n").expect("write modified");
 
-    let nodes = vec![TreeNode {
+    let mut nodes = vec![TreeNode {
         path: file_path,
         name: "README.md".to_string(),
         node_type: NodeType::File,

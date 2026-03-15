@@ -7,20 +7,25 @@ use crate::highlight::syntax::HighlightContext;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
 use ratatui::style::{Color, Style};
+use std::fs;
+use std::io::Cursor;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 const BINARY_SAMPLE: usize = 1024;
 const HIGHLIGHT_MAX_BYTES: usize = 256 * 1024;
 const TEXT_PREVIEW_READ_LIMIT: usize = 2 * 1024 * 1024;
-const IMAGE_PREVIEW_READ_LIMIT: usize = 8 * 1024 * 1024;
+const IMAGE_PREVIEW_READ_LIMIT: usize = 50 * 1024 * 1024;
 const ASCII_IMAGE_ASPECT_RATIO: f32 = 0.5;
 const IMAGE_PREVIEW_MAX_WIDTH: u32 = 60;
 const IMAGE_PREVIEW_MAX_HEIGHT: u32 = 30;
 const ASCII_IMAGE_RAMP: [char; 4] = ['█', '▓', '▒', '░'];
+const IMAGE_PREVIEW_MAX_PIXELS: u64 = 20_000_000;
+
+const IMAGE_PREVIEW_TOO_LARGE_MESSAGE: &str = "Image preview skipped for very large image.";
 
 #[derive(Debug, Clone)]
 pub struct ImagePreviewUpdate {
@@ -45,10 +50,24 @@ impl ImagePreviewWorker {
                     request = next_request;
                 }
 
-                let preview = load_image_preview_for_width(&request.0, request.1);
+                let mut steps = Vec::new();
+                let _ = send_loading_update(&update_tx, request.0.as_path(), &steps);
+
+                let request_path = request.0;
+                let request_width = request.1;
+                let mut emit_step = |step: &str| {
+                    steps.push(step.to_string());
+                    let _ = send_loading_update(&update_tx, request_path.as_path(), &steps);
+                };
+                let preview = load_image_preview_for_width_with_steps(
+                    &request_path,
+                    request_width,
+                    &mut emit_step,
+                );
+
                 if update_tx
                     .send(ImagePreviewUpdate {
-                        path: request.0,
+                        path: request_path,
                         preview,
                     })
                     .is_err()
@@ -159,61 +178,119 @@ fn is_supported_image_format(format: ImageFormat) -> bool {
     )
 }
 
-fn try_render_image_ascii_preview_with_width(
-    path: &Path,
-    data: &[u8],
-    target_width: Option<u16>,
-) -> Option<(String, Vec<StyledPreviewLine>)> {
-    let guessed_format = image::guess_format(data).ok();
-    let should_try_decode = is_supported_image_extension(path)
-        || guessed_format
-            .map(is_supported_image_format)
-            .unwrap_or(false);
-    if !should_try_decode {
-        return None;
-    }
+// fn try_render_image_ascii_preview_with_width(
+//     path: &Path,
+//     data: &[u8],
+//     target_width: Option<u16>,
+// ) -> Option<(String, Vec<StyledPreviewLine>)> {
+//     if is_supported_image_path(path) {
+//         let (width, height) = image_dimensions_for_preview(data).ok()?;
+//         let pixel_count = u64::from(width).saturating_mul(u64::from(height));
+//         if pixel_count > IMAGE_PREVIEW_MAX_PIXELS {
+//             return None;
+//         }
+//     }
 
-    let image = match guessed_format.filter(|fmt| is_supported_image_format(*fmt)) {
-        Some(format) => image::load_from_memory_with_format(data, format).ok()?,
-        None => image::load_from_memory(data).ok()?,
-    };
-    Some(render_image_ascii_preview(&image, target_width))
+//     let guessed_format = image::guess_format(data).ok();
+//     let should_try_decode = is_supported_image_extension(path)
+//         || guessed_format
+//             .map(is_supported_image_format)
+//             .unwrap_or(false);
+//     if !should_try_decode {
+//         return None;
+//     }
+
+//     let image = match guessed_format.filter(|fmt| is_supported_image_format(*fmt)) {
+//         Some(format) => image::load_from_memory_with_format(data, format).ok()?,
+//         None => image::load_from_memory(data).ok()?,
+//     };
+//     Some(render_image_ascii_preview(&image, target_width))
+// }
+
+fn image_preview_loading_step(path: &Path) -> PreviewDocument {
+    PreviewDocument {
+        source_path: PathBuf::from(path),
+        load_state: LoadState::Ready,
+        content_type: ContentType::PlainText,
+        image_preview: false,
+        image_preview_pending: true,
+        content_excerpt: "Loading image preview".to_string(),
+        ..PreviewDocument::default()
+    }
 }
+
+fn format_image_preview_loading_steps(steps: &[String]) -> String {
+    steps.join("\n")
+}
+
+fn send_loading_update(update_tx: &Sender<ImagePreviewUpdate>, path: &Path, step: &[String]) {
+    let mut preview = image_preview_loading_step(path);
+    preview.content_excerpt = format_image_preview_loading_steps(step);
+    let _ = update_tx.send(ImagePreviewUpdate {
+        path: path.to_path_buf(),
+        preview,
+    });
+}
+
+fn format_step_duration(duration: Duration) -> String {
+    format!("{:.2}s", duration.as_secs_f64())
+}
+
+fn emit_timed_step<F>(name: &str, started_at: Instant, on_step: &mut F)
+where
+    F: FnMut(&str),
+{
+    on_step(&format!(
+        "{name} ({})",
+        format_step_duration(started_at.elapsed())
+    ));
+}
+
+fn compute_ascii_dimensions(width: u32, height: u32, target_width: Option<u16>) -> (u32, u32) {
+    let width = width.max(1);
+    let height = height.max(1);
+    let mut tw = target_width
+        .map(u32::from)
+        .unwrap_or(width.min(IMAGE_PREVIEW_MAX_WIDTH))
+        .min(IMAGE_PREVIEW_MAX_WIDTH)
+        .max(1);
+    let mut scaled_height = (height as f32 / width as f32) * tw as f32 * ASCII_IMAGE_ASPECT_RATIO;
+    if scaled_height > IMAGE_PREVIEW_MAX_HEIGHT as f32 {
+        let width_for_height = (IMAGE_PREVIEW_MAX_HEIGHT as f32 * width as f32)
+            / (height as f32 * ASCII_IMAGE_ASPECT_RATIO);
+        tw = width_for_height
+            .floor()
+            .max(1.0)
+            .min(IMAGE_PREVIEW_MAX_WIDTH as f32) as u32;
+        scaled_height = (height as f32 / width as f32) * tw as f32 * ASCII_IMAGE_ASPECT_RATIO;
+    }
+    let th = scaled_height
+        .round()
+        .max(1.0)
+        .min(IMAGE_PREVIEW_MAX_HEIGHT as f32) as u32;
+    (tw, th)
+}
+
+/// Pre-computed char representations to avoid repeated heap allocations.
+const ASCII_RAMP_STRS: [&str; 4] = ["\u{2588}", "\u{2593}", "\u{2592}", "\u{2591}"];
 
 fn render_image_ascii_preview(
     image: &DynamicImage,
     target_width: Option<u16>,
 ) -> (String, Vec<StyledPreviewLine>) {
-    let source = image.to_rgba8();
-    let width = source.width().max(1);
-    let height = source.height().max(1);
-    let mut target_width = target_width
-        .map(u32::from)
-        .unwrap_or(width.min(IMAGE_PREVIEW_MAX_WIDTH))
-        .min(IMAGE_PREVIEW_MAX_WIDTH)
-        .max(1);
-    let mut scaled_height =
-        (height as f32 / width as f32) * target_width as f32 * ASCII_IMAGE_ASPECT_RATIO;
-    if scaled_height > IMAGE_PREVIEW_MAX_HEIGHT as f32 {
-        let width_for_height = (IMAGE_PREVIEW_MAX_HEIGHT as f32 * width as f32)
-            / (height as f32 * ASCII_IMAGE_ASPECT_RATIO);
-        target_width = width_for_height
-            .floor()
-            .max(1.0)
-            .min(IMAGE_PREVIEW_MAX_WIDTH as f32) as u32;
-        scaled_height =
-            (height as f32 / width as f32) * target_width as f32 * ASCII_IMAGE_ASPECT_RATIO;
-    }
-    let target_height = scaled_height
-        .round()
-        .max(1.0)
-        .min(IMAGE_PREVIEW_MAX_HEIGHT as f32) as u32;
-    let resized =
-        image::imageops::resize(&source, target_width, target_height, FilterType::Triangle);
+    let (src_width, src_height) = (image.width().max(1), image.height().max(1));
+    let (target_width, target_height) =
+        compute_ascii_dimensions(src_width, src_height, target_width);
+
+    // Resize directly from the DynamicImage — avoids a full-resolution to_rgba8() copy.
+    let resized = image
+        .resize_exact(target_width, target_height, FilterType::Nearest)
+        .to_rgba8();
 
     let mut output = String::with_capacity(((target_width + 1) * target_height) as usize);
     let mut styled_lines = Vec::with_capacity(target_height as usize);
-    let ramp_max = (ASCII_IMAGE_RAMP.len().saturating_sub(1)) as f32;
+    let ramp_max = (ASCII_IMAGE_RAMP.len() - 1) as f32;
+
     for y in 0..target_height {
         let mut styled_line = Vec::with_capacity(target_width as usize);
         for x in 0..target_width {
@@ -227,7 +304,7 @@ fn render_image_ascii_preview(
             let (fg, bg) = enhanced_terminal_colors(pixel);
             output.push(ch);
             styled_line.push(StyledPreviewSegment {
-                text: ch.to_string(),
+                text: ASCII_RAMP_STRS[ramp_index].to_string(),
                 style: Style::default().fg(fg).bg(bg),
             });
         }
@@ -346,15 +423,28 @@ fn hsv_to_rgb(hue: f32, saturation: f32, value: f32) -> [u8; 3] {
     ]
 }
 
-pub fn render_image_preview_for_width(
-    path: &Path,
-    target_width: u16,
-) -> Option<(String, Vec<StyledPreviewLine>)> {
-    let data = read_image_preview_bytes(path).ok()?;
-    try_render_image_ascii_preview_with_width(path, &data, Some(target_width))
-}
+// pub fn render_image_preview_for_width(
+//     path: &Path,
+//     target_width: u16,
+// ) -> Option<(String, Vec<StyledPreviewLine>)> {
+//     let data = read_image_preview_bytes(path).ok()?;
+//     try_render_image_ascii_preview_with_width(path, &data, Some(target_width))
+// }
 
 pub fn load_image_preview_for_width(path: &Path, target_width: u16) -> PreviewDocument {
+    load_image_preview_for_width_with_steps(path, target_width, |_| {})
+}
+
+fn load_image_preview_for_width_with_steps<F>(
+    path: &Path,
+    target_width: u16,
+    mut on_step: F,
+) -> PreviewDocument
+where
+    F: FnMut(&str),
+{
+    let step_started = Instant::now();
+    emit_timed_step("Load image", step_started, &mut on_step);
     let mut doc = PreviewDocument {
         source_path: PathBuf::from(path),
         load_state: LoadState::Loading,
@@ -363,18 +453,80 @@ pub fn load_image_preview_for_width(path: &Path, target_width: u16) -> PreviewDo
     };
 
     let Ok(data) = read_image_preview_bytes(path) else {
+        emit_timed_step("Load image", step_started, &mut on_step);
         doc.load_state = LoadState::Error;
         doc.error_message = Some("Cannot read image preview.".to_string());
         return doc;
     };
+    emit_timed_step("Load image", step_started, &mut on_step);
 
-    let Some((ascii_preview, styled_lines)) =
-        try_render_image_ascii_preview_with_width(path, &data, Some(target_width))
-    else {
+    let step_started = Instant::now();
+
+    // Guess the format once and reuse for both dimension check and decode.
+    let guessed_format = image::guess_format(&data).ok();
+    let should_try_decode = is_supported_image_extension(path)
+        || guessed_format
+            .map(is_supported_image_format)
+            .unwrap_or(false);
+    if !should_try_decode {
+        emit_timed_step("Decode Image", step_started, &mut on_step);
         doc.load_state = LoadState::Error;
         doc.error_message = Some("Cannot decode image preview.".to_string());
         return doc;
+    }
+
+    // Check dimensions using guessed format to avoid re-parsing the header.
+    if is_supported_image_path(path) {
+        let dim_result = if let Some(fmt) = guessed_format {
+            image::ImageReader::with_format(Cursor::new(&data), fmt).into_dimensions()
+        } else {
+            image::ImageReader::new(Cursor::new(&data))
+                .with_guessed_format()
+                .ok()
+                .and_then(|r| r.into_dimensions().ok())
+                .ok_or_else(|| {
+                    image::ImageError::Unsupported(
+                        image::error::UnsupportedError::from_format_and_kind(
+                            image::error::ImageFormatHint::Unknown,
+                            image::error::UnsupportedErrorKind::GenericFeature(String::new()),
+                        ),
+                    )
+                })
+        };
+        if let Ok((w, h)) = dim_result {
+            if u64::from(w).saturating_mul(u64::from(h)) > IMAGE_PREVIEW_MAX_PIXELS {
+                emit_timed_step("Decode Image", step_started, &mut on_step);
+                doc.load_state = LoadState::Error;
+                doc.error_message = Some(IMAGE_PREVIEW_TOO_LARGE_MESSAGE.to_string());
+                return doc;
+            }
+        }
+    }
+
+    // Decode using the already-guessed format — no redundant header parsing.
+    let image = match guessed_format.filter(|fmt| is_supported_image_format(*fmt)) {
+        Some(format) => image::load_from_memory_with_format(&data, format).ok(),
+        None => image::load_from_memory(&data).ok(),
     };
+    let image = match image {
+        Some(image) => {
+            // Drop the raw bytes immediately after decode to free memory before rendering.
+            drop(data);
+            image
+        }
+        None => {
+            emit_timed_step("Decode Image", step_started, &mut on_step);
+            doc.load_state = LoadState::Error;
+            doc.error_message = Some("Cannot decode image preview.".to_string());
+            return doc;
+        }
+    };
+    emit_timed_step("Decode Image", step_started, &mut on_step);
+
+    let step_started = Instant::now();
+
+    let (ascii_preview, styled_lines) = render_image_ascii_preview(&image, Some(target_width));
+    emit_timed_step("Draw Image", step_started, &mut on_step);
 
     doc.load_state = LoadState::Ready;
     doc.content_type = ContentType::PlainText;

@@ -2,6 +2,9 @@ use crate::app::current_dir_state::truncate_for_status;
 use crate::app::state::{NodeType, SessionState, TreeNode};
 use crate::config::load::ThemeProfile;
 use crate::fs::git::GitFileStatus;
+use crate::tui::colors::{
+    GIT_ADDED, GIT_CONFLICTED, GIT_DELETED, GIT_IGNORED, GIT_MODIFIED, GIT_RENAMED,
+};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
@@ -72,18 +75,23 @@ fn normalize_display_path(path: &Path) -> PathBuf {
     }
 }
 
+pub fn shorten_path_with_home(path: &Path, home: &str) -> String {
+    let rendered = path.display().to_string();
+    if rendered == home {
+        "~".to_string()
+    } else if rendered.starts_with(&(home.to_owned() + "/")) {
+        format!("~{}", &rendered[home.len()..])
+    } else {
+        rendered
+    }
+}
+
 pub fn display_path_with_home(path: &Path) -> String {
     let rendered = path.display().to_string();
     let Some(home) = std::env::var_os("HOME").map(|s| s.to_string_lossy().to_string()) else {
         return rendered;
     };
-    if rendered == home {
-        "~".to_string()
-    } else if rendered.starts_with(&(home.clone() + "/")) {
-        format!("~{}", &rendered[home.len()..])
-    } else {
-        rendered
-    }
+    shorten_path_with_home(path, &home)
 }
 
 pub fn color_from_name(name: &str) -> Color {
@@ -127,9 +135,7 @@ pub fn node_style(
         style = style.add_modifier(Modifier::DIM);
     }
     if git_status == Some(GitFileStatus::Ignored) {
-        style = Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM);
+        style = Style::default().fg(GIT_IGNORED).add_modifier(Modifier::DIM);
     }
     style
 }
@@ -306,28 +312,28 @@ fn status_label_style(
 ) -> Style {
     if right_indicator == Some("*") {
         return Style::default()
-            .fg(Color::Yellow)
+            .fg(GIT_MODIFIED)
             .add_modifier(Modifier::BOLD);
     }
     match status {
-        Some(GitFileStatus::Deleted) => {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        }
+        Some(GitFileStatus::Deleted) => Style::default()
+            .fg(GIT_DELETED)
+            .add_modifier(Modifier::BOLD),
         Some(GitFileStatus::Modified) => Style::default()
-            .fg(Color::Yellow)
+            .fg(GIT_MODIFIED)
             .add_modifier(Modifier::BOLD),
-        Some(GitFileStatus::Added) | Some(GitFileStatus::Untracked) => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
+        Some(GitFileStatus::Added) | Some(GitFileStatus::Untracked) => {
+            Style::default().fg(GIT_ADDED).add_modifier(Modifier::BOLD)
+        }
         Some(GitFileStatus::Renamed) | Some(GitFileStatus::Copied) => Style::default()
-            .fg(Color::Cyan)
+            .fg(GIT_RENAMED)
             .add_modifier(Modifier::BOLD),
         Some(GitFileStatus::Conflicted) => Style::default()
-            .fg(Color::Magenta)
+            .fg(GIT_CONFLICTED)
             .add_modifier(Modifier::BOLD),
-        Some(GitFileStatus::Ignored) => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
+        Some(GitFileStatus::Ignored) => {
+            Style::default().fg(GIT_IGNORED).add_modifier(Modifier::DIM)
+        }
         None => Style::default(),
     }
 }

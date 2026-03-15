@@ -177,8 +177,8 @@ impl HighlightLanguage {
             Self::Html => LanguageSpec {
                 language_id: self.language_id(),
                 language: tree_sitter_html::language(),
-                highlights_query: tree_sitter_html::HIGHLIGHTS_QUERY.to_string(),
-                injections_query: tree_sitter_html::INJECTIONS_QUERY,
+                highlights_query: tree_sitter_html::HIGHLIGHT_QUERY.to_string(),
+                injections_query: tree_sitter_html::INJECTION_QUERY,
                 locals_query: EMPTY_QUERY,
             },
             Self::Java => LanguageSpec {

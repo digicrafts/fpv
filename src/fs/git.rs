@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
+
+use git2::{DiffFormat, DiffOptions, Repository, Status, StatusOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitFileStatus {
@@ -119,152 +120,100 @@ impl Drop for GitStatusWorker {
     }
 }
 
-pub fn git_repo_status_for_path(path: &Path) -> Option<GitRepoStatus> {
-    let repo_root = git_repo_root(path)?;
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("status")
-        .arg("--porcelain=1")
-        .arg("--ignored=matching")
-        .arg("-b")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let status = String::from_utf8(output.stdout).ok()?;
-    parse_porcelain_status(&status, repo_root)
+fn open_repo(path: &Path) -> Option<Repository> {
+    Repository::discover(path).ok()
 }
 
-fn git_repo_root(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()
-        .ok()?;
+fn repo_root(repo: &Repository) -> Option<PathBuf> {
+    repo.workdir().map(|p| p.to_path_buf())
+}
 
-    if !output.status.success() {
-        return None;
+fn head_branch_name(repo: &Repository) -> String {
+    if repo.head_detached().unwrap_or(false) {
+        return "detached".to_string();
     }
-
-    let root = String::from_utf8(output.stdout).ok()?;
-    let trimmed = root.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(trimmed))
+    match repo.head() {
+        Ok(reference) => reference.shorthand().unwrap_or("HEAD").to_string(),
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+            // No commits yet — try to extract branch name from the symbolic HEAD
+            repo.find_reference("HEAD")
+                .ok()
+                .and_then(|r| r.symbolic_target().map(String::from))
+                .and_then(|target| target.strip_prefix("refs/heads/").map(String::from))
+                .unwrap_or_else(|| "HEAD".to_string())
+        }
+        Err(_) => "HEAD".to_string(),
     }
 }
 
-fn parse_porcelain_status(text: &str, repo_root: PathBuf) -> Option<GitRepoStatus> {
-    let mut lines = text.lines();
-    let head_line = lines.next()?;
-    if !head_line.starts_with("## ") {
-        return None;
-    }
-
-    let branch = parse_branch_name(head_line)?;
-    let mut file_statuses = HashMap::new();
-
-    for line in lines {
-        if line.len() < 3 {
-            continue;
-        }
-
-        if line.starts_with("?? ") {
-            let rel = PathBuf::from(line[3..].trim());
-            file_statuses.insert(rel, GitFileStatus::Untracked);
-            continue;
-        }
-        if line.starts_with("!! ") {
-            let rel = PathBuf::from(line[3..].trim());
-            file_statuses.insert(rel, GitFileStatus::Ignored);
-            continue;
-        }
-
-        let x = line.as_bytes()[0] as char;
-        let y = line.as_bytes()[1] as char;
-        let status = classify_file_status(x, y);
-
-        if let Some(status) = status {
-            let rel = parse_path_from_status_line(line);
-            if !rel.as_os_str().is_empty() {
-                file_statuses.insert(rel, status);
-            }
-        }
-    }
-
-    Some(GitRepoStatus {
-        branch,
-        repo_root,
-        file_statuses,
-    })
-}
-
-fn parse_path_from_status_line(line: &str) -> PathBuf {
-    let payload = line.get(3..).unwrap_or("").trim();
-    let path = if let Some((_, to_path)) = payload.rsplit_once(" -> ") {
-        to_path.trim()
-    } else {
-        payload
-    };
-    PathBuf::from(path)
-}
-
-fn classify_file_status(x: char, y: char) -> Option<GitFileStatus> {
-    if is_conflict_state(x, y) {
+fn classify_status(status: Status) -> Option<GitFileStatus> {
+    if status.is_conflicted() {
         return Some(GitFileStatus::Conflicted);
     }
-    if x == 'R' || y == 'R' {
-        return Some(GitFileStatus::Renamed);
+    if status.is_ignored() {
+        return Some(GitFileStatus::Ignored);
     }
-    if x == 'D' || y == 'D' {
-        return Some(GitFileStatus::Deleted);
-    }
-    if x == 'A' || y == 'A' {
+    if status.contains(Status::WT_NEW) || status.contains(Status::INDEX_NEW) {
+        // INDEX_NEW = staged new file (Added), WT_NEW = untracked
+        if status.contains(Status::WT_NEW) && !status.contains(Status::INDEX_NEW) {
+            return Some(GitFileStatus::Untracked);
+        }
         return Some(GitFileStatus::Added);
     }
-    if x == 'C' || y == 'C' {
-        return Some(GitFileStatus::Copied);
+    if status.contains(Status::INDEX_RENAMED) || status.contains(Status::WT_RENAMED) {
+        return Some(GitFileStatus::Renamed);
     }
-    if matches!(x, 'M' | 'T') || matches!(y, 'M' | 'T') {
+    if status.contains(Status::INDEX_DELETED) || status.contains(Status::WT_DELETED) {
+        return Some(GitFileStatus::Deleted);
+    }
+    if status.contains(Status::INDEX_TYPECHANGE) || status.contains(Status::WT_TYPECHANGE) {
+        return Some(GitFileStatus::Modified);
+    }
+    if status.contains(Status::INDEX_MODIFIED) || status.contains(Status::WT_MODIFIED) {
         return Some(GitFileStatus::Modified);
     }
     None
 }
 
-fn parse_branch_name(head_line: &str) -> Option<String> {
-    let mut detail = head_line.trim_start_matches("## ").trim();
-    if detail.is_empty() {
-        return None;
-    }
-    if let Some(branch) = detail.strip_prefix("No commits yet on ") {
-        let branch = branch.trim();
-        return if branch.is_empty() {
-            None
-        } else {
-            Some(branch.to_string())
+pub fn git_repo_status_for_path(path: &Path) -> Option<GitRepoStatus> {
+    let repo = open_repo(path)?;
+    let root = repo_root(&repo)?;
+    let branch = head_branch_name(&repo);
+
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .include_ignored(true)
+        .recurse_ignored_dirs(false);
+
+    let statuses = repo.statuses(Some(&mut opts)).ok()?;
+    let mut file_statuses = HashMap::new();
+
+    for entry in statuses.iter() {
+        let Some(entry_path) = entry.path() else {
+            continue;
         };
+        let git_status = classify_status(entry.status());
+        if let Some(status) = git_status {
+            // For renames, use the new path if available
+            let path_str = entry
+                .head_to_index()
+                .and_then(|d| d.new_file().path().map(|p| p.to_path_buf()))
+                .or_else(|| {
+                    entry
+                        .index_to_workdir()
+                        .and_then(|d| d.new_file().path().map(|p| p.to_path_buf()))
+                })
+                .unwrap_or_else(|| PathBuf::from(entry_path));
+            file_statuses.insert(path_str, status);
+        }
     }
-    if detail == "HEAD (no branch)" {
-        return Some("detached".to_string());
-    }
-    if let Some((left, _)) = detail.split_once("...") {
-        detail = left.trim();
-    } else if let Some((left, _)) = detail.split_once(' ') {
-        detail = left.trim();
-    }
-    if detail.is_empty() {
-        None
-    } else {
-        Some(detail.to_string())
-    }
+
+    Some(GitRepoStatus {
+        branch,
+        repo_root: root,
+        file_statuses,
+    })
 }
 
 fn normalized_file_path(file_path: &Path) -> PathBuf {
@@ -281,120 +230,104 @@ fn normalized_file_path(file_path: &Path) -> PathBuf {
 
 pub fn git_diff_for_file(file_path: &Path) -> Option<String> {
     let file_path = normalized_file_path(file_path);
-    let repo_root = git_repo_root(file_path.parent().unwrap_or(&file_path))?;
+    let repo = open_repo(file_path.parent().unwrap_or(&file_path))?;
+    let root = repo_root(&repo)?;
+    let rel_path = file_path.strip_prefix(&root).ok()?;
+    let rel_str = rel_path.to_str()?;
 
-    // Try staged diff first, then unstaged
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&repo_root)
-        .args(["diff", "HEAD", "--"])
-        .arg(&file_path)
-        .output()
-        .ok()?;
+    // Try diff HEAD to working directory for this specific file
+    let head_tree = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .and_then(|c| c.tree().ok());
 
-    if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).into_owned();
-        if !text.trim().is_empty() {
-            return Some(text);
+    let mut opts = DiffOptions::new();
+    opts.pathspec(rel_str);
+
+    // diff HEAD tree against workdir (includes both staged and unstaged changes)
+    let diff = if let Some(ref tree) = head_tree {
+        repo.diff_tree_to_workdir_with_index(Some(tree), Some(&mut opts))
+            .ok()?
+    } else {
+        // No HEAD (empty repo) — diff index to workdir
+        repo.diff_index_to_workdir(None, Some(&mut opts)).ok()?
+    };
+
+    if diff.deltas().len() == 0 {
+        // No changes found via tree diff; for untracked files, generate a synthetic diff
+        // by reading the file content directly
+        let workdir_content = fs::read_to_string(&file_path).ok()?;
+        if workdir_content.trim().is_empty() {
+            return None;
         }
+        // Build a diff-like output for untracked files
+        let mut output = format!(
+            "diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n",
+            rel = rel_str
+        );
+        let lines: Vec<&str> = workdir_content.lines().collect();
+        output.push_str(&format!("@@ -0,0 +1,{} @@\n", lines.len()));
+        for line in &lines {
+            output.push('+');
+            output.push_str(line);
+            output.push('\n');
+        }
+        return Some(output);
     }
 
-    // For untracked files, diff against /dev/null
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&repo_root)
-        .args(["diff", "--no-index", "--", "/dev/null"])
-        .arg(&file_path)
-        .output()
-        .ok()?;
+    // Format as unified diff text
+    let mut diff_text = String::new();
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        match line.origin() {
+            '+' | '-' | ' ' => {
+                diff_text.push(line.origin());
+            }
+            'H' | 'F' => {
+                // Header and file header lines — include as-is
+            }
+            _ => {}
+        }
+        if let Ok(content) = std::str::from_utf8(line.content()) {
+            diff_text.push_str(content);
+        }
+        true
+    })
+    .ok()?;
 
-    // git diff --no-index returns exit code 1 when files differ
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !text.trim().is_empty() {
-        Some(text)
-    } else {
+    if diff_text.trim().is_empty() {
         None
+    } else {
+        Some(diff_text)
     }
 }
 
 pub fn git_head_content_for_file(file_path: &Path) -> Option<String> {
     let file_path = normalized_file_path(file_path);
-    let repo_root = git_repo_root(file_path.parent().unwrap_or(&file_path))?;
-    let rel_path = file_path.strip_prefix(&repo_root).ok()?;
+    let repo = open_repo(file_path.parent().unwrap_or(&file_path))?;
+    let root = repo_root(&repo)?;
+    let rel_path = file_path.strip_prefix(&root).ok()?;
 
-    let exists_in_head = Command::new("git")
-        .arg("-C")
-        .arg(&repo_root)
-        .args(["cat-file", "-e"])
-        .arg(format!("HEAD:{}", rel_path.display()))
-        .output()
-        .ok()?;
+    let head_commit = repo.head().ok()?.peel_to_commit().ok()?;
+    let tree = head_commit.tree().ok()?;
 
-    if !exists_in_head.status.success() {
-        return Some(String::new());
+    match tree.get_path(rel_path) {
+        Ok(entry) => {
+            let object = entry.to_object(&repo).ok()?;
+            let blob = object.as_blob()?;
+            // Return content as UTF-8 string (lossy for binary)
+            Some(String::from_utf8_lossy(blob.content()).into_owned())
+        }
+        Err(_) => {
+            // File does not exist in HEAD (new/untracked file)
+            Some(String::new())
+        }
     }
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&repo_root)
-        .args(["show"])
-        .arg(format!("HEAD:{}", rel_path.display()))
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn is_conflict_state(x: char, y: char) -> bool {
-    matches!((x, y), ('U', _) | (_, 'U') | ('A', 'A') | ('D', 'D'))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_porcelain_status, GitFileStatus};
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn parses_branch_and_per_file_statuses() {
-        let input = "## main...origin/main [ahead 1]\n M src/lib.rs\nD  old.txt\nR  old-name.txt -> new-name.txt\nA  added.txt\nUU conflict.txt\n?? tests/new_test.rs\n!! target/\n";
-        let parsed = parse_porcelain_status(input, PathBuf::from("/tmp/repo")).expect("parsed");
-
-        assert_eq!(parsed.branch, "main");
-        assert_eq!(parsed.repo_root, PathBuf::from("/tmp/repo"));
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("src/lib.rs")),
-            Some(&GitFileStatus::Modified)
-        );
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("old.txt")),
-            Some(&GitFileStatus::Deleted)
-        );
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("new-name.txt")),
-            Some(&GitFileStatus::Renamed)
-        );
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("added.txt")),
-            Some(&GitFileStatus::Added)
-        );
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("conflict.txt")),
-            Some(&GitFileStatus::Conflicted)
-        );
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("tests/new_test.rs")),
-            Some(&GitFileStatus::Untracked)
-        );
-        assert_eq!(
-            parsed.file_statuses.get(Path::new("target/")),
-            Some(&GitFileStatus::Ignored)
-        );
-        assert_eq!(parsed.change_count(), 6);
-    }
+    use super::GitFileStatus;
 
     #[test]
     fn labels_match_expected_short_codes() {
@@ -406,12 +339,5 @@ mod tests {
         assert_eq!(GitFileStatus::Untracked.label(), "?");
         assert_eq!(GitFileStatus::Conflicted.label(), "U");
         assert_eq!(GitFileStatus::Ignored.label(), "!");
-    }
-
-    #[test]
-    fn parses_no_commits_yet_branch_name() {
-        let input = "## No commits yet on main\n?? readme.md\n";
-        let parsed = parse_porcelain_status(input, PathBuf::from("/tmp/repo")).expect("parsed");
-        assert_eq!(parsed.branch, "main");
     }
 }

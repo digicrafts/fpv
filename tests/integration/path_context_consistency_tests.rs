@@ -6,7 +6,7 @@ use fpv::config::keymap::default_keymap;
 use fpv::config::load::StatusDisplayMode;
 use fpv::fs::current_dir::list_current_directory;
 use fpv::tui::status_bar::{compose_bottom_status_line, compose_status_title_line};
-use fpv::tui::tree_pane::display_path_with_home;
+use fpv::tui::tree_pane::shorten_path_with_home;
 use std::fs;
 use tempfile::tempdir;
 
@@ -28,8 +28,10 @@ fn status_line_contains_current_path() {
 
 #[test]
 fn home_path_is_shortened_with_tilde_in_header_context() {
-    std::env::set_var("HOME", "/tmp/fpv-home");
-    let rendered = display_path_with_home(std::path::Path::new("/tmp/fpv-home/work/fpv"));
+    let rendered = shorten_path_with_home(
+        std::path::Path::new("/tmp/fpv-home/work/fpv"),
+        "/tmp/fpv-home",
+    );
     assert_eq!(rendered, "~/work/fpv");
 }
 

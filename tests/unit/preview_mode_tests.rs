@@ -1,4 +1,4 @@
-use fpv::app::preview_controller::{refresh_preview, IMAGE_PREVIEW_DELAY};
+use fpv::app::preview_controller::refresh_preview;
 use fpv::app::state::{
     ContentType, LoadState, NodeType, PreviewFallbackReason, SelectedEntryMetadata, SessionState,
     StyledPreviewSegment, TreeNode,
@@ -13,7 +13,6 @@ use ratatui::Terminal;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 fn write_test_png(path: &std::path::Path) {
@@ -242,7 +241,7 @@ fn plain_text_file_preview_still_shows_line_numbers() {
         .draw(|frame| {
             draw_preview(
                 frame,
-                frame.size(),
+                frame.area(),
                 &doc,
                 &mut state,
                 &fpv::config::load::ThemeProfile::default(),
@@ -251,10 +250,34 @@ fn plain_text_file_preview_still_shows_line_numbers() {
         .expect("draw plain text");
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer.get(1, 1).symbol(), " ");
-    assert_eq!(buffer.get(3, 1).symbol(), "1");
-    assert_eq!(buffer.get(1, 2).symbol(), " ");
-    assert_eq!(buffer.get(3, 2).symbol(), "2");
+    assert_eq!(
+        buffer
+            .cell((1, 1))
+            .expect("cell exists for gutter marker")
+            .symbol(),
+        " "
+    );
+    assert_eq!(
+        buffer
+            .cell((3, 1))
+            .expect("cell exists for first line number")
+            .symbol(),
+        "1"
+    );
+    assert_eq!(
+        buffer
+            .cell((1, 2))
+            .expect("cell exists for second gutter marker")
+            .symbol(),
+        " "
+    );
+    assert_eq!(
+        buffer
+            .cell((3, 2))
+            .expect("cell exists for second line number")
+            .symbol(),
+        "2"
+    );
 }
 
 #[test]
@@ -338,7 +361,7 @@ fn image_preview_does_not_show_line_numbers() {
         .draw(|frame| {
             draw_preview(
                 frame,
-                frame.size(),
+                frame.area(),
                 &doc,
                 &mut state,
                 &fpv::config::load::ThemeProfile::default(),
@@ -348,11 +371,18 @@ fn image_preview_does_not_show_line_numbers() {
 
     let buffer = terminal.backend().buffer();
     assert!(buffer
-        .get(1, 1)
+        .cell((1, 1))
+        .expect("cell exists for image preview glyph")
         .symbol()
         .chars()
         .all(|ch| "░▒▓█".contains(ch)));
-    assert_ne!(buffer.get(3, 1).symbol(), "1");
+    assert_ne!(
+        buffer
+            .cell((3, 1))
+            .expect("cell exists beyond gutter")
+            .symbol(),
+        "1"
+    );
 }
 
 #[test]
@@ -395,7 +425,7 @@ fn image_preview_respects_60_by_30_bounds() {
 }
 
 #[test]
-fn image_preview_waits_before_rendering_after_selection() {
+fn image_preview_uses_background_worker_flow_without_delay() {
     let d = tempdir().expect("create tempdir");
     let p = d.path().join("sample.png");
     write_test_png(&p);
@@ -416,11 +446,10 @@ fn image_preview_waits_before_rendering_after_selection() {
     assert!(!pending.image_preview);
     assert!(pending.content_excerpt.contains("Loading image preview"));
 
-    state.selected_changed_at = Instant::now() - IMAGE_PREVIEW_DELAY - Duration::from_millis(100);
-    let ready = refresh_preview(&mut state, &nodes, &ctx, 1024);
-    assert!(!ready.image_preview_pending);
-    assert!(ready.image_preview);
-    assert!(!ready.content_excerpt.is_empty());
+    let still_pending = refresh_preview(&mut state, &nodes, &ctx, 1024);
+    assert!(still_pending.image_preview_pending);
+    assert!(!still_pending.image_preview);
+    assert!(still_pending.content_excerpt.contains("Loading image preview"));
 }
 
 #[test]
@@ -505,7 +534,7 @@ fn preview_render_clears_previous_content_when_switching_documents() {
         .draw(|frame| {
             draw_preview(
                 frame,
-                frame.size(),
+                frame.area(),
                 &long_doc,
                 &mut state,
                 &fpv::config::load::ThemeProfile::default(),
@@ -516,7 +545,7 @@ fn preview_render_clears_previous_content_when_switching_documents() {
         .draw(|frame| {
             draw_preview(
                 frame,
-                frame.size(),
+                frame.area(),
                 &short_doc,
                 &mut state,
                 &fpv::config::load::ThemeProfile::default(),
@@ -665,7 +694,7 @@ fn diff_preview_renders_markers_and_line_emphasis() {
         .draw(|frame| {
             draw_preview(
                 frame,
-                frame.size(),
+                frame.area(),
                 &doc,
                 &mut state,
                 &fpv::config::load::ThemeProfile::default(),
@@ -675,57 +704,77 @@ fn diff_preview_renders_markers_and_line_emphasis() {
 
     let buffer = terminal.backend().buffer();
 
-    let added_marker = buffer.get(1, 1);
+    let added_marker = buffer.cell((1, 1)).expect("cell exists at added marker");
     assert_eq!(added_marker.symbol(), "+");
     let added_marker_style = added_marker.style();
     assert_eq!(added_marker_style.fg, Some(Color::LightGreen));
     assert_eq!(added_marker_style.bg, Some(Color::Rgb(0, 70, 0)));
     assert!(added_marker_style.add_modifier.contains(Modifier::BOLD));
 
-    let added_number = buffer.get(3, 1);
+    let added_number = buffer
+        .cell((3, 1))
+        .expect("cell exists at added line number");
     assert_eq!(added_number.symbol(), "8");
     let added_number_style = added_number.style();
     assert_eq!(added_number_style.fg, Some(Color::LightGreen));
     assert_eq!(added_number_style.bg, Some(Color::Rgb(0, 70, 0)));
     assert!(added_number_style.add_modifier.contains(Modifier::BOLD));
 
-    let added_separator = buffer.get(4, 1);
+    let added_separator = buffer.cell((4, 1)).expect("cell exists at added separator");
     assert_eq!(added_separator.symbol(), " ");
     assert_eq!(added_separator.style().bg, Some(Color::Rgb(0, 70, 0)));
 
-    let added_content = buffer.get(6, 1);
+    let added_content = buffer.cell((6, 1)).expect("cell exists at added content");
     assert_eq!(added_content.symbol(), "a");
     let added_content_style = added_content.style();
     assert_eq!(added_content_style.fg, Some(Color::Blue));
     assert_eq!(added_content_style.bg, Some(Color::Rgb(0, 70, 0)));
     assert!(added_content_style.add_modifier.contains(Modifier::BOLD));
-    assert_eq!(buffer.get(20, 1).style().bg, Some(Color::Rgb(0, 70, 0)));
+    assert_eq!(
+        buffer
+            .cell((20, 1))
+            .expect("cell exists at added content bg")
+            .style()
+            .bg,
+        Some(Color::Rgb(0, 70, 0))
+    );
 
-    let deleted_marker = buffer.get(1, 2);
+    let deleted_marker = buffer.cell((1, 2)).expect("cell exists at deleted marker");
     assert_eq!(deleted_marker.symbol(), "-");
     let deleted_marker_style = deleted_marker.style();
     assert_eq!(deleted_marker_style.fg, Some(Color::LightRed));
     assert_eq!(deleted_marker_style.bg, Some(Color::Rgb(90, 0, 0)));
     assert!(deleted_marker_style.add_modifier.contains(Modifier::DIM));
 
-    let deleted_number = buffer.get(3, 2);
+    let deleted_number = buffer
+        .cell((3, 2))
+        .expect("cell exists at deleted line number");
     assert_eq!(deleted_number.symbol(), "3");
     let deleted_number_style = deleted_number.style();
     assert_eq!(deleted_number_style.fg, Some(Color::LightRed));
     assert_eq!(deleted_number_style.bg, Some(Color::Rgb(90, 0, 0)));
     assert!(deleted_number_style.add_modifier.contains(Modifier::DIM));
 
-    let deleted_separator = buffer.get(4, 2);
+    let deleted_separator = buffer
+        .cell((4, 2))
+        .expect("cell exists at deleted separator");
     assert_eq!(deleted_separator.symbol(), " ");
     assert_eq!(deleted_separator.style().bg, Some(Color::Rgb(90, 0, 0)));
 
-    let deleted_content = buffer.get(6, 2);
+    let deleted_content = buffer.cell((6, 2)).expect("cell exists at deleted content");
     assert_eq!(deleted_content.symbol(), "d");
     let deleted_content_style = deleted_content.style();
     assert_eq!(deleted_content_style.fg, Some(Color::Yellow));
     assert_eq!(deleted_content_style.bg, Some(Color::Rgb(90, 0, 0)));
     assert!(deleted_content_style.add_modifier.contains(Modifier::DIM));
-    assert_eq!(buffer.get(20, 2).style().bg, Some(Color::Rgb(90, 0, 0)));
+    assert_eq!(
+        buffer
+            .cell((20, 2))
+            .expect("cell exists at deleted content bg")
+            .style()
+            .bg,
+        Some(Color::Rgb(90, 0, 0))
+    );
 }
 
 #[test]
@@ -766,7 +815,7 @@ fn diff_preview_scrollbar_marks_changed_positions() {
         .draw(|frame| {
             draw_preview(
                 frame,
-                frame.size(),
+                frame.area(),
                 &doc,
                 &mut state,
                 &fpv::config::load::ThemeProfile::default(),
@@ -775,7 +824,9 @@ fn diff_preview_scrollbar_marks_changed_positions() {
         .expect("draw diff with scrollbar");
 
     let buffer = terminal.backend().buffer();
-    let marker_cell = buffer.get(28, 3);
+    let marker_cell = buffer
+        .cell((28, 3))
+        .expect("cell exists at scrollbar marker");
     assert_eq!(marker_cell.symbol(), "•");
     assert_eq!(marker_cell.style().fg, Some(Color::LightGreen));
 }

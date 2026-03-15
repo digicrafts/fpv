@@ -3,7 +3,6 @@ pub mod focus;
 pub mod navigation;
 pub mod navigation_result;
 pub mod preview_controller;
-pub mod preview_errors;
 pub mod run;
 pub mod state;
 pub mod status;

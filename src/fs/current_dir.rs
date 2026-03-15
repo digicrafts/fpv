@@ -80,10 +80,7 @@ pub fn list_current_directory_with_visibility(
             NodeType::Unknown
         };
 
-        let readable = match node_type {
-            NodeType::Directory => fs::read_dir(&path).is_ok(),
-            _ => fs::File::open(&path).is_ok(),
-        };
+        let readable = true;
 
         nodes.push(TreeNode {
             name,

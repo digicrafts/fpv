@@ -1,7 +1,7 @@
 use fpv::app::navigation::{enter_selected_directory, go_to_parent_directory};
 use fpv::app::state::{NodeType, SessionState};
 use fpv::fs::current_dir::list_current_directory;
-use fpv::tui::tree_pane::{display_path_with_home, entry_prefix};
+use fpv::tui::tree_pane::{entry_prefix, shorten_path_with_home};
 use std::fs;
 use tempfile::tempdir;
 
@@ -30,7 +30,6 @@ fn right_then_left_returns_to_parent() {
 
 #[test]
 fn non_home_paths_remain_absolute_in_display_format() {
-    std::env::set_var("HOME", "/tmp/fpv-home");
-    let rendered = display_path_with_home(std::path::Path::new("/var/tmp/fpv"));
+    let rendered = shorten_path_with_home(std::path::Path::new("/var/tmp/fpv"), "/tmp/fpv-home");
     assert_eq!(rendered, "/var/tmp/fpv");
 }

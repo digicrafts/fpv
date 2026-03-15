@@ -2,7 +2,11 @@ use crate::app::state::{
     ContentType, PreviewFallbackReason, StyledPreviewLine, StyledPreviewSegment,
 };
 use crate::highlight::syntax::{HighlightContext, HIGHLIGHT_NAMES};
-use ratatui::style::{Color, Modifier, Style};
+use crate::tui::colors::{
+    SYNTAX_COMMENT, SYNTAX_FUNCTION, SYNTAX_KEYWORD, SYNTAX_NUMBER, SYNTAX_PARAMETER,
+    SYNTAX_REFERENCE, SYNTAX_STRING, SYNTAX_TITLE, SYNTAX_TYPE,
+};
+use ratatui::style::{Modifier, Style};
 use std::path::Path;
 use tree_sitter_highlight::{Highlight, HighlightEvent, Highlighter};
 
@@ -18,36 +22,36 @@ pub struct HighlightRenderResult {
 fn style_for_capture(name: &str) -> Style {
     if name.starts_with("comment") {
         return Style::default()
-            .fg(Color::Rgb(120, 150, 120))
+            .fg(SYNTAX_COMMENT)
             .add_modifier(Modifier::ITALIC);
     }
     if name.starts_with("keyword") {
         return Style::default()
-            .fg(Color::Rgb(220, 150, 80))
+            .fg(SYNTAX_KEYWORD)
             .add_modifier(Modifier::BOLD);
     }
     if name.starts_with("string") || name.starts_with("escape") {
-        return Style::default().fg(Color::Rgb(140, 200, 130));
+        return Style::default().fg(SYNTAX_STRING);
     }
     if name.starts_with("number") || name.starts_with("constant") {
-        return Style::default().fg(Color::Rgb(120, 190, 210));
+        return Style::default().fg(SYNTAX_NUMBER);
     }
     if name.starts_with("type") || name.starts_with("tag") || name.starts_with("attribute") {
-        return Style::default().fg(Color::Rgb(120, 170, 230));
+        return Style::default().fg(SYNTAX_TYPE);
     }
     if name.starts_with("function") || name.starts_with("constructor") {
-        return Style::default().fg(Color::Rgb(220, 200, 120));
+        return Style::default().fg(SYNTAX_FUNCTION);
     }
     if name.starts_with("variable.parameter") || name.starts_with("property") {
-        return Style::default().fg(Color::Rgb(210, 170, 230));
+        return Style::default().fg(SYNTAX_PARAMETER);
     }
     if name.starts_with("text.title") {
         return Style::default()
-            .fg(Color::Rgb(110, 170, 240))
+            .fg(SYNTAX_TITLE)
             .add_modifier(Modifier::BOLD);
     }
     if name.starts_with("text.literal") {
-        return Style::default().fg(Color::Rgb(140, 200, 130));
+        return Style::default().fg(SYNTAX_STRING);
     }
     if name.starts_with("text.emphasis") {
         return Style::default().add_modifier(Modifier::ITALIC);
@@ -57,7 +61,7 @@ fn style_for_capture(name: &str) -> Style {
     }
     if name.starts_with("text.reference") || name.starts_with("text.uri") {
         return Style::default()
-            .fg(Color::Rgb(130, 180, 230))
+            .fg(SYNTAX_REFERENCE)
             .add_modifier(Modifier::UNDERLINED);
     }
     Style::default()

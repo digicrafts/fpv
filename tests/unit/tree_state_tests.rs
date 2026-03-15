@@ -4,7 +4,7 @@ use fpv::config::load::ThemeProfile;
 use fpv::fs::git::{GitFileStatus, GitRepoStatus};
 use fpv::tui::tree_pane::{
     color_from_name, current_directory_header_line, directory_contains_uncommitted_changes,
-    display_path_with_home, entry_prefix, node_style,
+    entry_prefix, node_style, shorten_path_with_home,
 };
 use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
@@ -122,15 +122,16 @@ fn current_directory_header_includes_change_count_when_dirty() {
 
 #[test]
 fn home_path_is_rendered_with_tilde_prefix() {
-    std::env::set_var("HOME", "/tmp/fpv-home");
-    let rendered = display_path_with_home(&PathBuf::from("/tmp/fpv-home/projects/fpv"));
+    let rendered = shorten_path_with_home(
+        &PathBuf::from("/tmp/fpv-home/projects/fpv"),
+        "/tmp/fpv-home",
+    );
     assert_eq!(rendered, "~/projects/fpv");
 }
 
 #[test]
 fn non_home_path_stays_absolute() {
-    std::env::set_var("HOME", "/tmp/fpv-home");
-    let rendered = display_path_with_home(&PathBuf::from("/opt/work/fpv"));
+    let rendered = shorten_path_with_home(&PathBuf::from("/opt/work/fpv"), "/tmp/fpv-home");
     assert_eq!(rendered, "/opt/work/fpv");
 }
 

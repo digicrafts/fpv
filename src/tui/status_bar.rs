@@ -3,8 +3,9 @@ use crate::app::state::SelectedEntryMetadata;
 use crate::app::state::SessionState;
 use crate::config::keymap::Action;
 use crate::config::load::StatusDisplayMode;
+use crate::tui::colors::{STATUS_BAR_BG, STATUS_BAR_FG};
 use crossterm::event::KeyEvent;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use std::collections::HashMap;
@@ -148,7 +149,7 @@ pub fn compose_status_title_line(
 }
 
 fn status_bar_style() -> Style {
-    Style::default().fg(Color::White).bg(Color::DarkGray)
+    Style::default().fg(STATUS_BAR_FG).bg(STATUS_BAR_BG)
 }
 
 pub fn draw_status(

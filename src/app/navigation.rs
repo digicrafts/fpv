@@ -89,7 +89,7 @@ pub fn enter_selected_directory(
         ));
     }
 
-    if !node.readable {
+    if std::fs::read_dir(&node.path).is_err() {
         return Ok(NavigationActionResult::blocked(
             "enter_directory",
             state.current_path.clone(),

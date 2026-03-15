@@ -7,18 +7,18 @@ use crate::fs::git::{git_head_content_for_file, GitFileStatus, GitRepoStatus};
 use crate::fs::preview::{is_supported_image_path, load_preview};
 use crate::highlight::render::render_with_highlight;
 use crate::highlight::syntax::HighlightContext;
-use ratatui::style::{Color, Modifier};
+use crate::tui::colors::{DIFF_ADDED_BG, DIFF_DELETED_BG};
+use ratatui::style::Modifier;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const DIRECTORY_PREVIEW_MAX_ENTRIES: usize = 2000;
 const DIFF_MAX_TOTAL_LINES: usize = 4_000;
 const DIFF_MAX_EDIT_DISTANCE: usize = 1_024;
 const DIFF_CACHE_MAX_LINES: usize = 8_000;
 const DIFF_CACHE_MAX_BYTES: usize = 512 * 1024;
-pub const IMAGE_PREVIEW_DELAY: Duration = Duration::from_secs(1);
 
 fn directory_entry_label(node: &TreeNode) -> String {
     match node.node_type {
@@ -153,13 +153,12 @@ fn apply_modifier_to_line(
     line.iter()
         .map(|segment| {
             let style = match change {
-                PreviewLineChange::Added => segment
-                    .style
-                    .bg(Color::Rgb(0, 70, 0))
-                    .add_modifier(Modifier::BOLD),
+                PreviewLineChange::Added => {
+                    segment.style.bg(DIFF_ADDED_BG).add_modifier(Modifier::BOLD)
+                }
                 PreviewLineChange::Deleted => segment
                     .style
-                    .bg(Color::Rgb(90, 0, 0))
+                    .bg(DIFF_DELETED_BG)
                     .add_modifier(Modifier::DIM),
             };
             StyledPreviewSegment {
@@ -236,14 +235,12 @@ fn backtrack_myers(
         let v = &trace[d - 1];
         let k = x - y;
         let d = d as isize;
-        let prev_k = if k == -d
-            || (k != d
-                && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
-        {
-            k + 1
-        } else {
-            k - 1
-        };
+        let prev_k =
+            if k == -d || (k != d && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize]) {
+                k + 1
+            } else {
+                k - 1
+            };
 
         let prev_x = v[(prev_k + offset) as usize];
         let prev_y = prev_x - prev_k;
@@ -287,7 +284,8 @@ fn preview_diff_cache_key(path: &Path, current_doc: &PreviewDocument) -> Preview
 }
 
 fn should_cache_diff(doc: &PreviewDocument) -> bool {
-    doc.styled_lines.len() <= DIFF_CACHE_MAX_LINES && doc.content_excerpt.len() <= DIFF_CACHE_MAX_BYTES
+    doc.styled_lines.len() <= DIFF_CACHE_MAX_LINES
+        && doc.content_excerpt.len() <= DIFF_CACHE_MAX_BYTES
 }
 
 fn diff_preview(
@@ -422,7 +420,6 @@ pub fn refresh_preview(
             state.preview_diff_cache = None;
             directory_preview(&node.path, state.show_hidden, state.git_status.as_ref())
         } else if is_supported_image_path(&node.path)
-            && state.selected_changed_at.elapsed() < IMAGE_PREVIEW_DELAY
         {
             state.preview_diff_cache = None;
             pending_image_preview(&node.path)

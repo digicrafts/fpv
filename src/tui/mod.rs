@@ -1,3 +1,4 @@
+pub mod colors;
 pub mod config_warnings;
 pub mod event_loop;
 pub mod input;

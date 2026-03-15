@@ -35,7 +35,7 @@ pub fn build_tree(root: &Path, max_entries: usize) -> Result<Vec<TreeNode>> {
             NodeType::Unknown
         };
 
-        let readable = fs::metadata(&path).is_ok();
+        let readable = true;
         nodes.push(TreeNode {
             path,
             name,

@@ -309,32 +309,9 @@ fn defer_or_discard_redundant_mouse_scrolls(
     Ok(())
 }
 
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
-}
-
 fn build_osc52(data: &[u8]) -> Vec<u8> {
-    let encoded = base64_encode(data);
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
     let mut out = Vec::with_capacity(9 + encoded.len());
     out.extend_from_slice(b"\x1b]52;c;");
     out.extend_from_slice(encoded.as_bytes());
@@ -656,10 +633,8 @@ pub fn process_once(
                             return Ok((false, false, false));
                         }
                         if state.preview_fullscreen || state.focus_pane == FocusPane::Preview {
-                            let _ = state.page_scroll_preview_up(
-                                preview_total_lines,
-                                preview_viewport_rows,
-                            );
+                            let _ = state
+                                .page_scroll_preview_up(preview_total_lines, preview_viewport_rows);
                         }
                     }
                     Action::PageDown => {
@@ -790,7 +765,7 @@ pub fn process_once(
                 }
             }
         }
-    Event::Mouse(mouse) => {
+        Event::Mouse(mouse) => {
             if state.help_overlay_visible {
                 return Ok((false, false, false));
             }
@@ -855,11 +830,7 @@ pub fn process_once(
                         }
                     }
                     MouseEventKind::Drag(MouseButton::Left) if state.preview_scrollbar_dragging => {
-                        let _ = handle_preview_scrollbar_drag(
-                            state,
-                            mouse,
-                            rendered_total_lines,
-                        );
+                        let _ = handle_preview_scrollbar_drag(state, mouse, rendered_total_lines);
                     }
                     MouseEventKind::Drag(MouseButton::Left) if state.preview_selecting => {
                         let pos = mouse_to_content_position(state, mouse);
@@ -1045,9 +1016,9 @@ mod tests {
                 inner_width: 40,
                 show_line_numbers: true,
                 wrap_enabled: true,
-                content_ptr: 0,
-                styled_lines_ptr: 0,
-                line_changes_ptr: 0,
+                content_hash: 0,
+                styled_lines_hash: 0,
+                line_changes_hash: 0,
             },
             rendered_lines: vec![Line::default(); 25],
             rendered_row_changes: vec![None; 25],

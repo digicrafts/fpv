@@ -1,6 +1,6 @@
 use crate::config::load::StatusDisplayMode;
-use crossterm::event::Event;
 use crate::fs::git::GitRepoStatus;
+use crossterm::event::Event;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -81,7 +81,7 @@ pub struct StyledPreviewSegment {
 
 pub type StyledPreviewLine = Vec<StyledPreviewSegment>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PreviewLineChange {
     Added,
     Deleted,
@@ -93,9 +93,9 @@ pub struct PreviewRenderCacheKey {
     pub inner_width: u16,
     pub show_line_numbers: bool,
     pub wrap_enabled: bool,
-    pub content_ptr: usize,
-    pub styled_lines_ptr: usize,
-    pub line_changes_ptr: usize,
+    pub content_hash: u64,
+    pub styled_lines_hash: u64,
+    pub line_changes_hash: u64,
 }
 
 #[derive(Debug, Clone)]

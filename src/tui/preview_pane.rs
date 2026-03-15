@@ -1,8 +1,13 @@
 use crate::app::state::{
-    ContentType, LoadState, PreviewDocument, PreviewLineChange,
-    PreviewRenderCache, PreviewRenderCacheKey, PreviewSelection, SessionState,
+    ContentType, LoadState, PreviewDocument, PreviewLineChange, PreviewRenderCache,
+    PreviewRenderCacheKey, PreviewSelection, SessionState,
 };
 use crate::config::load::ThemeProfile;
+use crate::tui::colors::{
+    DIFF_ADDED_BG, DIFF_BADGE_BG, DIFF_BADGE_FG, DIFF_DELETED_BG, DIFF_MARKER_ADDED,
+    DIFF_MARKER_DELETED, LINE_NUMBER_FG, OVERLAY_BG, OVERLAY_FG, SCROLLBAR_THUMB, SCROLLBAR_TRACK,
+    SELECTION_BG, SELECTION_FG,
+};
 use crate::tui::status_bar::compose_preview_metadata_line;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
@@ -10,6 +15,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use unicode_width::UnicodeWidthChar;
 
 const RENDER_CACHE_MAX_LINES: usize = 8_000;
@@ -32,20 +39,13 @@ fn line_count(text: &str) -> usize {
     text.split('\n').count().max(1)
 }
 
-fn preview_scroll_position_text(
-    state: &SessionState,
-    total_lines: usize,
-) -> String {
+fn preview_scroll_position_text(state: &SessionState, total_lines: usize) -> String {
     let total = total_lines.max(1);
     let current = state.preview_scroll_row.saturating_add(1).min(total);
     format!("[{current}:{total}]")
 }
 
-fn preview_border_bottom_line(
-    state: &SessionState,
-    total_lines: usize,
-    width: usize,
-) -> String {
+fn preview_border_bottom_line(state: &SessionState, total_lines: usize, width: usize) -> String {
     let left = preview_scroll_position_text(state, total_lines);
     if width <= left.len() {
         return left.chars().take(width).collect();
@@ -81,9 +81,7 @@ fn plain_text_for_doc(doc: &PreviewDocument) -> String {
             .error_message
             .clone()
             .unwrap_or_else(|| "Unable to render preview".to_string()),
-        _ => {
-            doc.content_excerpt.clone()
-        }
+        _ => doc.content_excerpt.clone(),
     }
 }
 
@@ -96,15 +94,7 @@ fn line_number_width(total_lines: usize) -> usize {
 }
 
 fn line_number_style() -> Style {
-    Style::default().fg(Color::Gray)
-}
-
-fn added_diff_background() -> Color {
-    Color::Rgb(0, 70, 0)
-}
-
-fn deleted_diff_background() -> Color {
-    Color::Rgb(90, 0, 0)
+    Style::default().fg(LINE_NUMBER_FG)
 }
 
 fn displayed_line_number(doc: &PreviewDocument, index: usize) -> usize {
@@ -143,20 +133,49 @@ fn diff_marker_kind(change: Option<PreviewLineChange>) -> Option<DiffMarkerKind>
     }
 }
 
+fn cache_signature(
+    content: &str,
+    styled_lines: &[crate::app::state::StyledPreviewLine],
+    line_changes: &[Option<PreviewLineChange>],
+) -> (u64, u64, u64) {
+    let mut content_hasher = DefaultHasher::new();
+    content.hash(&mut content_hasher);
+
+    let mut styled_lines_hasher = DefaultHasher::new();
+    for line in styled_lines {
+        line.len().hash(&mut styled_lines_hasher);
+        for segment in line {
+            segment.text.hash(&mut styled_lines_hasher);
+            format!("{:?}", segment.style).hash(&mut styled_lines_hasher);
+        }
+    }
+
+    let mut line_changes_hasher = DefaultHasher::new();
+    for change in line_changes {
+        change.hash(&mut line_changes_hasher);
+    }
+
+    (
+        content_hasher.finish(),
+        styled_lines_hasher.finish(),
+        line_changes_hasher.finish(),
+    )
+}
+
 fn diff_marker_span(kind: Option<DiffMarkerKind>) -> Span<'static> {
     match kind {
         Some(DiffMarkerKind::Added) => Span::styled(
             "+",
             Style::default()
-                .fg(Color::LightGreen)
-                .bg(added_diff_background())
+                .fg(DIFF_MARKER_ADDED)
+                .bg(DIFF_ADDED_BG)
                 .add_modifier(Modifier::BOLD),
         ),
         Some(DiffMarkerKind::Deleted) => Span::styled(
             "-",
             Style::default()
-                .fg(Color::LightRed)
-                .bg(deleted_diff_background())
+                .fg(DIFF_MARKER_DELETED)
+                .bg(DIFF_DELETED_BG)
                 .add_modifier(Modifier::DIM),
         ),
         None => Span::raw(" "),
@@ -166,12 +185,8 @@ fn diff_marker_span(kind: Option<DiffMarkerKind>) -> Span<'static> {
 fn diff_fill_span(kind: Option<DiffMarkerKind>, width: usize) -> Span<'static> {
     let text = " ".repeat(width);
     match kind {
-        Some(DiffMarkerKind::Added) => {
-            Span::styled(text, Style::default().bg(added_diff_background()))
-        }
-        Some(DiffMarkerKind::Deleted) => {
-            Span::styled(text, Style::default().bg(deleted_diff_background()))
-        }
+        Some(DiffMarkerKind::Added) => Span::styled(text, Style::default().bg(DIFF_ADDED_BG)),
+        Some(DiffMarkerKind::Deleted) => Span::styled(text, Style::default().bg(DIFF_DELETED_BG)),
         None => Span::raw(text),
     }
 }
@@ -183,12 +198,12 @@ fn line_number_prefix(
 ) -> Vec<Span<'static>> {
     let number_style = match diff_marker {
         Some(DiffMarkerKind::Added) => Style::default()
-            .fg(Color::LightGreen)
-            .bg(added_diff_background())
+            .fg(DIFF_MARKER_ADDED)
+            .bg(DIFF_ADDED_BG)
             .add_modifier(Modifier::BOLD),
         Some(DiffMarkerKind::Deleted) => Style::default()
-            .fg(Color::LightRed)
-            .bg(deleted_diff_background())
+            .fg(DIFF_MARKER_DELETED)
+            .bg(DIFF_DELETED_BG)
             .add_modifier(Modifier::DIM),
         None => line_number_style(),
     };
@@ -325,13 +340,14 @@ fn apply_selection_highlight(
             };
 
             if in_selection {
-                let cell = buf.get_mut(screen_x, screen_y);
-                let s = cell
-                    .style()
-                    .bg(Color::LightBlue)
-                    .fg(Color::Black)
-                    .remove_modifier(Modifier::DIM);
-                cell.set_style(s);
+                if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                    let s = cell
+                        .style()
+                        .bg(SELECTION_BG)
+                        .fg(SELECTION_FG)
+                        .remove_modifier(Modifier::DIM);
+                    cell.set_style(s);
+                }
             }
         }
     }
@@ -411,8 +427,8 @@ fn render_scroll_indicator(
         scroll_row.saturating_mul(max_thumb_top) / max_scroll
     };
 
-    let track_style = Style::default().fg(Color::DarkGray);
-    let thumb_style = Style::default().fg(Color::Gray);
+    let track_style = Style::default().fg(SCROLLBAR_TRACK);
+    let thumb_style = Style::default().fg(SCROLLBAR_THUMB);
     let mut change_markers = vec![None; indicator_height];
     if total_lines > 0 {
         let max_row_index = total_lines.saturating_sub(1).max(1);
@@ -441,15 +457,15 @@ fn render_scroll_indicator(
         let marker_change = change_markers[row];
         let (ch, style) = if is_thumb {
             let style = match marker_change {
-                Some(PreviewLineChange::Added) => thumb_style.bg(added_diff_background()),
-                Some(PreviewLineChange::Deleted) => thumb_style.bg(deleted_diff_background()),
+                Some(PreviewLineChange::Added) => thumb_style.bg(DIFF_ADDED_BG),
+                Some(PreviewLineChange::Deleted) => thumb_style.bg(DIFF_DELETED_BG),
                 None => thumb_style,
             };
             ("█", style)
         } else {
             match marker_change {
-                Some(PreviewLineChange::Added) => ("•", Style::default().fg(Color::LightGreen)),
-                Some(PreviewLineChange::Deleted) => ("•", Style::default().fg(Color::LightRed)),
+                Some(PreviewLineChange::Added) => ("•", Style::default().fg(DIFF_MARKER_ADDED)),
+                Some(PreviewLineChange::Deleted) => ("•", Style::default().fg(DIFF_MARKER_DELETED)),
                 None => ("│", track_style),
             }
         };
@@ -468,8 +484,8 @@ fn render_scroll_indicator(
 
 fn diff_background_for_change(change: Option<PreviewLineChange>) -> Option<Color> {
     match change {
-        Some(PreviewLineChange::Added) => Some(added_diff_background()),
-        Some(PreviewLineChange::Deleted) => Some(deleted_diff_background()),
+        Some(PreviewLineChange::Added) => Some(DIFF_ADDED_BG),
+        Some(PreviewLineChange::Deleted) => Some(DIFF_DELETED_BG),
         None => None,
     }
 }
@@ -501,8 +517,9 @@ fn paint_full_row_diff_background(
         };
 
         for screen_x in paint_start..paint_end {
-            let cell = buf.get_mut(screen_x, inner.y + screen_y);
-            cell.set_style(cell.style().bg(bg));
+            if let Some(cell) = buf.cell_mut((screen_x, inner.y + screen_y)) {
+                cell.set_style(cell.style().bg(bg));
+            }
         }
     }
 }
@@ -769,15 +786,18 @@ fn build_preview_render_cache(
         (lines, row_changes, line_number_cols)
     };
 
+    let (content_hash, styled_lines_hash, line_changes_hash) =
+        cache_signature(&doc.content_excerpt, &doc.styled_lines, &doc.line_changes);
+
     PreviewRenderCache {
         key: PreviewRenderCacheKey {
             epoch,
             inner_width,
             show_line_numbers,
             wrap_enabled: use_wrap,
-            content_ptr: doc.content_excerpt.as_ptr() as usize,
-            styled_lines_ptr: doc.styled_lines.as_ptr() as usize,
-            line_changes_ptr: doc.line_changes.as_ptr() as usize,
+            content_hash,
+            styled_lines_hash,
+            line_changes_hash,
         },
         total_lines: rendered_lines.len().max(1),
         rendered_lines,
@@ -787,7 +807,8 @@ fn build_preview_render_cache(
 }
 
 fn should_cache_render(doc: &PreviewDocument, cache: &PreviewRenderCache) -> bool {
-    cache.total_lines <= RENDER_CACHE_MAX_LINES && doc.content_excerpt.len() <= RENDER_CACHE_MAX_TEXT_BYTES
+    cache.total_lines <= RENDER_CACHE_MAX_LINES
+        && doc.content_excerpt.len() <= RENDER_CACHE_MAX_TEXT_BYTES
 }
 
 pub fn draw_preview(
@@ -800,11 +821,8 @@ pub fn draw_preview(
     frame.render_widget(Clear, area);
     let title = preview_title_for_state(state);
     let total_lines = preview_total_lines(doc);
-    let metadata_line = preview_border_bottom_line(
-        state,
-        total_lines,
-        area.width.saturating_sub(2) as usize,
-    );
+    let metadata_line =
+        preview_border_bottom_line(state, total_lines, area.width.saturating_sub(2) as usize);
     let block = Block::default()
         .title(
             Line::from(vec![Span::raw(" "), Span::raw(title), Span::raw(" ")])
@@ -825,14 +843,16 @@ pub fn draw_preview(
     };
     let show_line_numbers = line_numbers_enabled(state, doc);
     let use_wrap = state.preview_wrap_enabled;
+    let (content_hash, styled_lines_hash, line_changes_hash) =
+        cache_signature(&doc.content_excerpt, &doc.styled_lines, &doc.line_changes);
     let cache_key = PreviewRenderCacheKey {
         epoch: state.preview_render_epoch,
         inner_width: inner.width,
         show_line_numbers,
         wrap_enabled: use_wrap,
-        content_ptr: doc.content_excerpt.as_ptr() as usize,
-        styled_lines_ptr: doc.styled_lines.as_ptr() as usize,
-        line_changes_ptr: doc.line_changes.as_ptr() as usize,
+        content_hash,
+        styled_lines_hash,
+        line_changes_hash,
     };
     let cache_matches = state
         .preview_render_cache
@@ -904,8 +924,8 @@ pub fn draw_preview(
     }
 
     let bold_inverted = Style::default()
-        .fg(Color::Black)
-        .bg(Color::White)
+        .fg(OVERLAY_FG)
+        .bg(OVERLAY_BG)
         .add_modifier(Modifier::BOLD);
 
     if state.preview_copy_indicator {
@@ -917,8 +937,8 @@ pub fn draw_preview(
             render_overlay_label(frame, inner, " No changes ", bold_inverted);
         }
         let diff_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Yellow)
+            .fg(DIFF_BADGE_FG)
+            .bg(DIFF_BADGE_BG)
             .add_modifier(Modifier::BOLD);
         render_border_label_top_left(frame, area, " DIFF ", diff_style);
     }

@@ -10,7 +10,7 @@ Explore folders, preview files, and review diffs instantly without leaving your 
 Built for speed and clarity, fpv delivers near-instant preview updates with an intentionally minimal UI: just a focused tree and preview, keyboard-first controls, and zero extra clutter.  
 Under the hood, fpv is powered by [Ratatui](https://github.com/ratatui-org/ratatui) for responsive, terminal-native rendering.
 
-Current release: `v0.1.10`
+Current release: `v0.1.11`
 
 ---
 

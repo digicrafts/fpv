@@ -5,7 +5,9 @@ use crate::app::state::{
 use crate::highlight::render::{render_with_highlight, HighlightRenderResult};
 use crate::highlight::syntax::HighlightContext;
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageFormat};
+use image::{DynamicImage, ImageDecoder, ImageFormat};
+#[cfg(not(feature = "turbojpeg-fastpath"))]
+use jpeg_decoder::PixelFormat as JpegPixelFormat;
 use ratatui::style::{Color, Style};
 use std::fs;
 use std::io::Cursor;
@@ -14,6 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+#[cfg(feature = "turbojpeg-fastpath")]
+use turbojpeg::{self, PixelFormat as TurboPixelFormat, ScalingFactor};
 
 const BINARY_SAMPLE: usize = 1024;
 const HIGHLIGHT_MAX_BYTES: usize = 256 * 1024;
@@ -23,7 +27,7 @@ const ASCII_IMAGE_ASPECT_RATIO: f32 = 0.5;
 const IMAGE_PREVIEW_MAX_WIDTH: u32 = 60;
 const IMAGE_PREVIEW_MAX_HEIGHT: u32 = 30;
 const ASCII_IMAGE_RAMP: [char; 4] = ['█', '▓', '▒', '░'];
-const IMAGE_PREVIEW_MAX_PIXELS: u64 = 20_000_000;
+const IMAGE_PREVIEW_MAX_PIXELS: u64 = 200_000_000;
 
 const IMAGE_PREVIEW_TOO_LARGE_MESSAGE: &str = "Image preview skipped for very large image.";
 
@@ -317,6 +321,48 @@ fn render_image_ascii_preview(
     (output, styled_lines)
 }
 
+#[cfg(not(feature = "turbojpeg-fastpath"))]
+fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(data));
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    Some((u32::from(info.width), u32::from(info.height)))
+}
+
+#[cfg(not(feature = "turbojpeg-fastpath"))]
+fn decode_jpeg_for_preview(data: &[u8], target_width: Option<u16>) -> Option<DynamicImage> {
+    let mut decoder = jpeg_decoder::Decoder::new(Cursor::new(data));
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    let source_width = u32::from(info.width);
+    let source_height = u32::from(info.height);
+    let (requested_width, requested_height) =
+        compute_ascii_dimensions(source_width, source_height, target_width);
+
+    // Ask the JPEG decoder for a smaller output to avoid full-resolution decode cost.
+    let _ = decoder.scale(
+        requested_width.min(u16::MAX as u32) as u16,
+        requested_height.min(u16::MAX as u32) as u16,
+    );
+    let pixels = decoder.decode().ok()?;
+    let decoded_info = decoder.info()?;
+    let width = u32::from(decoded_info.width);
+    let height = u32::from(decoded_info.height);
+
+    match decoded_info.pixel_format {
+        JpegPixelFormat::L8 => {
+            let image = image::GrayImage::from_raw(width, height, pixels)?;
+            Some(DynamicImage::ImageLuma8(image))
+        }
+        JpegPixelFormat::RGB24 => {
+            let image = image::RgbImage::from_raw(width, height, pixels)?;
+            Some(DynamicImage::ImageRgb8(image))
+        }
+        // Keep uncommon formats on the generic path for compatibility.
+        _ => None,
+    }
+}
+
 fn read_file_with_limit(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> {
     let file = fs::File::open(path)?;
     let mut data = Vec::new();
@@ -444,7 +490,7 @@ where
     F: FnMut(&str),
 {
     let step_started = Instant::now();
-    emit_timed_step("Load image", step_started, &mut on_step);
+    // emit_timed_step("Load image", step_started, &mut on_step);
     let mut doc = PreviewDocument {
         source_path: PathBuf::from(path),
         load_state: LoadState::Loading,
@@ -475,25 +521,66 @@ where
         return doc;
     }
 
-    // Check dimensions using guessed format to avoid re-parsing the header.
-    if is_supported_image_path(path) {
-        let dim_result = if let Some(fmt) = guessed_format {
-            image::ImageReader::with_format(Cursor::new(&data), fmt).into_dimensions()
-        } else {
-            image::ImageReader::new(Cursor::new(&data))
+    let selected_format = guessed_format.filter(|fmt| is_supported_image_format(*fmt));
+    if selected_format == Some(ImageFormat::Jpeg) {
+        if let Some((w, h)) = jpeg_dimensions(&data) {
+            if u64::from(w).saturating_mul(u64::from(h)) > IMAGE_PREVIEW_MAX_PIXELS {
+                emit_timed_step("Decode Image", step_started, &mut on_step);
+                doc.load_state = LoadState::Error;
+                doc.error_message = Some(IMAGE_PREVIEW_TOO_LARGE_MESSAGE.to_string());
+                return doc;
+            }
+        }
+    }    
+
+    // JPEG fast-path: format-specific decoder + scaled decode near preview size.
+    let image = if selected_format == Some(ImageFormat::Jpeg) {
+        decode_jpeg_for_preview(&data, Some(target_width)).or_else(|| {
+            let decoder = image::ImageReader::with_format(Cursor::new(&data), ImageFormat::Jpeg)
+                .into_decoder()
+                .ok()?;
+            if is_supported_image_path(path) {
+                let (w, h) = decoder.dimensions();
+                if u64::from(w).saturating_mul(u64::from(h)) > IMAGE_PREVIEW_MAX_PIXELS {
+                    return None;
+                }
+            }
+            DynamicImage::from_decoder(decoder).ok()
+        })
+    } else {
+        // Generic path: build one decoder and reuse for dimensions + decode.
+        let decoder = match selected_format {
+            Some(format) => image::ImageReader::with_format(Cursor::new(&data), format)
+                .into_decoder()
+                .ok(),
+            None => image::ImageReader::new(Cursor::new(&data))
                 .with_guessed_format()
                 .ok()
-                .and_then(|r| r.into_dimensions().ok())
-                .ok_or_else(|| {
-                    image::ImageError::Unsupported(
-                        image::error::UnsupportedError::from_format_and_kind(
-                            image::error::ImageFormatHint::Unknown,
-                            image::error::UnsupportedErrorKind::GenericFeature(String::new()),
-                        ),
-                    )
-                })
+                .and_then(|reader| reader.into_decoder().ok()),
         };
-        if let Ok((w, h)) = dim_result {
+        decoder.and_then(|decoder| {
+            if is_supported_image_path(path) {
+                let (w, h) = decoder.dimensions();
+                if u64::from(w).saturating_mul(u64::from(h)) > IMAGE_PREVIEW_MAX_PIXELS {
+                    return None;
+                }
+            }
+            DynamicImage::from_decoder(decoder).ok()
+        })
+    };
+
+    if image.is_none() && is_supported_image_path(path) && selected_format != Some(ImageFormat::Jpeg) {
+        // Re-checking dimensions directly keeps the user-facing "too large" error accurate.
+        let dim_result = match selected_format {
+            Some(format) => image::ImageReader::with_format(Cursor::new(&data), format)
+                .into_dimensions()
+                .ok(),
+            None => image::ImageReader::new(Cursor::new(&data))
+                .with_guessed_format()
+                .ok()
+                .and_then(|reader| reader.into_dimensions().ok()),
+        };
+        if let Some((w, h)) = dim_result {
             if u64::from(w).saturating_mul(u64::from(h)) > IMAGE_PREVIEW_MAX_PIXELS {
                 emit_timed_step("Decode Image", step_started, &mut on_step);
                 doc.load_state = LoadState::Error;
@@ -503,11 +590,6 @@ where
         }
     }
 
-    // Decode using the already-guessed format — no redundant header parsing.
-    let image = match guessed_format.filter(|fmt| is_supported_image_format(*fmt)) {
-        Some(format) => image::load_from_memory_with_format(&data, format).ok(),
-        None => image::load_from_memory(&data).ok(),
-    };
     let image = match image {
         Some(image) => {
             // Drop the raw bytes immediately after decode to free memory before rendering.
@@ -522,9 +604,7 @@ where
         }
     };
     emit_timed_step("Decode Image", step_started, &mut on_step);
-
     let step_started = Instant::now();
-
     let (ascii_preview, styled_lines) = render_image_ascii_preview(&image, Some(target_width));
     emit_timed_step("Draw Image", step_started, &mut on_step);
 

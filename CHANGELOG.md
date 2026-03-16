@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.11] - 2026-03-16
+
+### Changed
+- Improved performance for image preview. e.g. Add fast path for jpeg decode using turbojpeg.
+
 ## [0.1.10] - 2026-03-13
 
 ### Changed

@@ -194,7 +194,7 @@ fn current_image_target_width(state: &SessionState) -> u16 {
     state.preview_width_cols.saturating_sub(4).max(1)
 }
 
-const IMAGE_PREVIEW_PROGRESS_STEPS: [&str; 5] = ["Load image", "Decode Image 1", "Decode Image 2", "Decode Image 3", "Draw Image"];
+const IMAGE_PREVIEW_PROGRESS_STEPS: [&str; 3] = ["Load image", "Decode Image", "Draw Image"];
 
 fn image_preview_step_index(step_name: &str) -> Option<usize> {
     IMAGE_PREVIEW_PROGRESS_STEPS
@@ -202,8 +202,8 @@ fn image_preview_step_index(step_name: &str) -> Option<usize> {
         .position(|name| *name == step_name)
 }
 
-fn parse_image_preview_step_timings(content: &str) -> [Option<f64>; 5] {
-    let mut step_timings = [None, None, None, None, None];
+fn parse_image_preview_step_timings(content: &str) -> [Option<f64>; 3] {
+    let mut step_timings = [None, None, None];
     for line in content.lines() {
         let line = line.trim();
         let Some((step_name, value_part)) = line.rsplit_once(" (") else {

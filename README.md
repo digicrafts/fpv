@@ -10,7 +10,7 @@ Explore folders, preview files, and review diffs instantly without leaving your 
 Built for speed and clarity, fpv delivers near-instant preview updates with an intentionally minimal UI: just a focused tree and preview, keyboard-first controls, and zero extra clutter.  
 Under the hood, fpv is powered by [Ratatui](https://github.com/ratatui-org/ratatui) for responsive, terminal-native rendering.
 
-Current release: `v0.1.11`
+Current release: `v0.1.12`
 
 ---
 
@@ -28,6 +28,7 @@ Current release: `v0.1.11`
 - **Fully customizable** — Tune key bindings and theme behavior with a simple TOML configuration
 - **Reliable fallbacks** — Safe plain-text rendering for binaries or files that cannot be highlighted
 - **Ratatui-powered** — Smooth, low-latency interface updates built on the Ratatui widget/rendering ecosystem
+- **Preview-pane text search** — Find and jump to text matches inside the active file preview quickly.
 
 ## Installation
 

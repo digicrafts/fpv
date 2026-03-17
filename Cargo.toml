@@ -1,6 +1,6 @@
 [package]
 name = "fpv"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 description = "A minimal, keyboard-first TUI file previewer with syntax highlighting"
 authors = ["Digicrafts"]

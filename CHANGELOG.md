@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.12] - 2026-03-17
+
+### Added
+- Added text search in the preview pane for quickly finding matches within the currently previewed file content.
+
 ## [0.1.11] - 2026-03-16
 
 ### Changed

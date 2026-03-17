@@ -12,6 +12,8 @@ mod perf_directory_transition_tests;
 mod perf_preview_latency;
 #[path = "integration/perf_tree_navigation.rs"]
 mod perf_tree_navigation;
+#[path = "integration/preview_search_flow.rs"]
+mod preview_search_flow;
 #[path = "integration/permission_display_regression.rs"]
 mod permission_display_regression;
 #[path = "integration/preview_footer_layout_flow.rs"]
@@ -20,8 +22,6 @@ mod preview_footer_layout_flow;
 mod preview_navigation_flow;
 #[path = "integration/preview_panel_title_flow.rs"]
 mod preview_panel_title_flow;
-#[path = "integration/quit_restore_terminal.rs"]
-mod quit_restore_terminal;
 #[path = "integration/rapid_navigation_regression_tests.rs"]
 mod rapid_navigation_regression_tests;
 #[path = "integration/regression_suite.rs"]

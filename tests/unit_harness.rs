@@ -30,6 +30,8 @@ mod selection_bounds_tests;
 mod selection_revalidation_tests;
 #[path = "unit/tree_state_tests.rs"]
 mod tree_state_tests;
+#[path = "unit/preview_search_tests.rs"]
+mod preview_search_tests;
 
 // Navigation display refinement coverage:
 // - directory-first ordering and hidden filtering

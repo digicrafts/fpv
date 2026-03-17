@@ -46,7 +46,10 @@ fn preview_scroll_position_text(state: &SessionState, total_lines: usize) -> Str
 }
 
 fn preview_border_bottom_line(state: &SessionState, total_lines: usize, width: usize) -> String {
-    let left = preview_scroll_position_text(state, total_lines);
+    let mut left = preview_scroll_position_text(state, total_lines);
+    if state.preview_diff_mode {
+        left.push_str(" DIFF");
+    }
     if width <= left.len() {
         return left.chars().take(width).collect();
     }
@@ -353,6 +356,74 @@ fn apply_selection_highlight(
     }
 }
 
+fn apply_search_highlights(
+    frame: &mut Frame<'_>,
+    inner: ratatui::layout::Rect,
+    search: &crate::app::state::PreviewSearch,
+    scroll_row: usize,
+    scroll_col: usize,
+    line_number_cols: usize,
+    content_lines: &[&str],
+) {
+    use crate::tui::colors::{SEARCH_CURRENT_MATCH_BG, SEARCH_MATCH_BG, SEARCH_MATCH_FG};
+
+    let buf = frame.buffer_mut();
+    if search.match_positions.is_empty() {
+        return;
+    };
+
+    for (match_idx, &(match_line, match_start, match_end)) in search.match_positions.iter().enumerate() {
+        let is_current = match_idx == search.current_match_index;
+        let bg = if is_current {
+            SEARCH_CURRENT_MATCH_BG
+        } else {
+            SEARCH_MATCH_BG
+        };
+
+        if match_line < scroll_row || match_line >= scroll_row + inner.height as usize {
+            continue;
+        }
+
+        let screen_y = inner.y + (match_line - scroll_row) as u16;
+        let line_text = content_lines.get(match_line).copied().unwrap_or("");
+        if line_text.is_empty() {
+            continue;
+        }
+
+        let start_col = byte_to_screen_col(line_text, match_start);
+        let end_col = byte_to_screen_col(line_text, match_end);
+
+        for col in start_col..end_col {
+            let screen_col_offset = col.saturating_sub(scroll_col);
+            if screen_col_offset >= inner.width as usize {
+                continue;
+            }
+
+            let line_number_width = line_number_cols.min(inner.width as usize) as u16;
+            let screen_x = inner.x + line_number_width + screen_col_offset as u16;
+
+            if screen_x >= inner.x && screen_x < inner.x + inner.width && screen_y >= inner.y && screen_y < inner.y + inner.height {
+                if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                    let style = cell.style().bg(bg).fg(SEARCH_MATCH_FG);
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+}
+
+fn byte_to_screen_col(line: &str, byte_idx: usize) -> usize {
+    let target = byte_idx.min(line.len());
+    let mut col = 0usize;
+    for (idx, ch) in line.char_indices() {
+        if idx >= target {
+            break;
+        }
+        col += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+    col
+}
+
 fn render_overlay_label(
     frame: &mut Frame<'_>,
     inner: ratatui::layout::Rect,
@@ -370,20 +441,73 @@ fn render_overlay_label(
     frame.render_widget(widget, area);
 }
 
-fn render_border_label_top_left(
+fn render_search_bar(
     frame: &mut Frame<'_>,
-    area: ratatui::layout::Rect,
-    label: &str,
-    style: Style,
+    top_area: ratatui::layout::Rect,
+    search: &crate::app::state::PreviewSearch,
 ) {
-    let label_width = label.len() as u16;
-    if area.width <= 2 || area.height == 0 || label_width > area.width.saturating_sub(2) {
+    let (current, total) = crate::app::preview_search::match_count(search);
+    let case_indicator = if search.case_sensitive { "[Aa]" } else { "[aa]" };
+    let match_text = if total == 0 {
+        "no matches".to_string()
+    } else {
+        format!("{}/{}", current, total)
+    };
+
+    let style = Style::default().fg(OVERLAY_FG).bg(OVERLAY_BG);
+
+    let query_text = format!("Search: {}", search.query);
+    let status_text = format!("{} {}", match_text, case_indicator);
+    let status_width = status_text.chars().count() as u16;
+
+    if top_area.height == 0 || top_area.width == 0 {
         return;
     }
 
-    let widget_area = ratatui::layout::Rect::new(area.x + 1, area.y, label_width, 1);
-    let widget = Paragraph::new(Span::styled(label, style));
-    frame.render_widget(widget, widget_area);
+    let usable_status_width = status_width.min(top_area.width);
+    let chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Horizontal)
+        .constraints([
+            ratatui::layout::Constraint::Fill(1),
+            ratatui::layout::Constraint::Length(usable_status_width),
+        ])
+        .split(top_area);
+
+    let query_widget = Paragraph::new(query_text).style(style);
+    let status_widget = Paragraph::new(status_text).style(style);
+    frame.render_widget(query_widget, chunks[0]);
+    frame.render_widget(status_widget, chunks[1]);
+}
+
+fn render_bottom_diff_badge(
+    frame: &mut Frame<'_>,
+    area: ratatui::layout::Rect,
+    state: &SessionState,
+    total_lines: usize,
+) {
+    if !state.preview_diff_mode || area.width <= 2 || area.height == 0 {
+        return;
+    }
+
+    let line_count_text = preview_scroll_position_text(state, total_lines);
+    let badge_text = "DIFF";
+    let badge_x = area.x + 1 + line_count_text.chars().count() as u16 + 1;
+    let content_right_x = area.x + area.width.saturating_sub(1);
+    if badge_x.saturating_add(badge_text.len() as u16) > content_right_x {
+        return;
+    }
+
+    let badge_style = Style::default()
+        .fg(DIFF_BADGE_FG)
+        .bg(DIFF_BADGE_BG)
+        .add_modifier(Modifier::BOLD);
+    let badge_area = ratatui::layout::Rect::new(
+        badge_x,
+        area.y + area.height.saturating_sub(1),
+        badge_text.len() as u16,
+        1,
+    );
+    frame.render_widget(Paragraph::new(Span::styled(badge_text, badge_style)), badge_area);
 }
 
 fn is_unsupported_preview(doc: &PreviewDocument) -> bool {
@@ -406,10 +530,21 @@ fn render_scroll_indicator(
     total_lines: usize,
     scroll_row: usize,
     rendered_row_changes: &[Option<PreviewLineChange>],
+    search: Option<&crate::app::state::PreviewSearch>,
 ) {
+    use crate::tui::colors::{SEARCH_CURRENT_MATCH_BG, SEARCH_MATCH_BG};
+
     if inner.width == 0 || inner.height == 0 {
         return;
     }
+
+    #[derive(Clone, Copy, Default)]
+    struct ScrollMarker {
+        diff: Option<PreviewLineChange>,
+        has_match: bool,
+        current_match: bool,
+    }
+
     let viewport_rows = inner.height as usize;
     if total_lines <= viewport_rows {
         return;
@@ -429,7 +564,7 @@ fn render_scroll_indicator(
 
     let track_style = Style::default().fg(SCROLLBAR_TRACK);
     let thumb_style = Style::default().fg(SCROLLBAR_THUMB);
-    let mut change_markers = vec![None; indicator_height];
+    let mut scroll_markers = vec![ScrollMarker::default(); indicator_height];
     if total_lines > 0 {
         let max_row_index = total_lines.saturating_sub(1).max(1);
         let max_indicator_index = indicator_height.saturating_sub(1);
@@ -438,48 +573,74 @@ fn render_scroll_indicator(
                 continue;
             };
             let indicator_row = row_index.saturating_mul(max_indicator_index) / max_row_index;
-            let slot = &mut change_markers[indicator_row];
-            *slot = match (*slot, change) {
-                (None, change) => Some(change),
-                (Some(existing), PreviewLineChange::Added)
-                    if existing != PreviewLineChange::Added =>
-                {
-                    Some(existing)
-                }
-                (Some(_), PreviewLineChange::Deleted) => Some(PreviewLineChange::Deleted),
-                (Some(existing), _) => Some(existing),
-            };
+            let slot = &mut scroll_markers[indicator_row];
+            slot.diff = Some(match slot.diff {
+                Some(PreviewLineChange::Deleted) => PreviewLineChange::Deleted,
+                Some(existing) => existing,
+                None => change,
+            });
         }
     }
-    let mut lines = Vec::with_capacity(indicator_height);
+
+    // Add search match markers
+    if let Some(search) = search {
+        for (index, &(match_line, _, _)) in search.match_positions.iter().enumerate() {
+            if match_line < total_lines {
+                let max_row_index = total_lines.saturating_sub(1).max(1);
+                let max_indicator_index = indicator_height.saturating_sub(1);
+                let indicator_row = match_line.saturating_mul(max_indicator_index) / max_row_index;
+                if indicator_row < scroll_markers.len() {
+                    if index == search.current_match_index {
+                        scroll_markers[indicator_row].current_match = true;
+                    } else {
+                        scroll_markers[indicator_row].has_match = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut scrollbar_lines = Vec::with_capacity(indicator_height);
+    let mut border_lines = Vec::with_capacity(indicator_height);
     for row in 0..indicator_height {
         let is_thumb = row >= thumb_top && row < thumb_top + thumb_height;
-        let marker_change = change_markers[row];
-        let (ch, style) = if is_thumb {
-            let style = match marker_change {
-                Some(PreviewLineChange::Added) => thumb_style.bg(DIFF_ADDED_BG),
-                Some(PreviewLineChange::Deleted) => thumb_style.bg(DIFF_DELETED_BG),
-                None => thumb_style,
-            };
-            ("█", style)
+        let marker = scroll_markers[row];
+        let (scroll_char, scroll_style) = if is_thumb {
+            ("█", thumb_style)
         } else {
-            match marker_change {
+            ("│", track_style)
+        };
+        scrollbar_lines.push(Line::from(Span::styled(scroll_char, scroll_style)));
+
+        let (indicator_char, indicator_style) = if marker.current_match {
+            ("◉", Style::default().fg(SEARCH_CURRENT_MATCH_BG))
+        } else if marker.has_match {
+            ("◌", Style::default().fg(SEARCH_MATCH_BG))
+        } else {
+            match marker.diff {
                 Some(PreviewLineChange::Added) => ("•", Style::default().fg(DIFF_MARKER_ADDED)),
                 Some(PreviewLineChange::Deleted) => ("•", Style::default().fg(DIFF_MARKER_DELETED)),
                 None => ("│", track_style),
             }
         };
-        lines.push(Line::from(Span::styled(ch, style)));
+        border_lines.push(Line::from(Span::styled(indicator_char, indicator_style)));
     }
 
-    let indicator_x = inner.x + inner.width.saturating_sub(1);
-    let indicator_area = ratatui::layout::Rect {
-        x: indicator_x,
+    let scrollbar_area = ratatui::layout::Rect {
+        x: inner.x + inner.width.saturating_sub(1),
         y: inner.y,
         width: 1,
         height: inner.height,
     };
-    frame.render_widget(Paragraph::new(Text::from(lines)), indicator_area);
+    let border_indicator_area = ratatui::layout::Rect {
+        x: inner.x + inner.width,
+        y: inner.y,
+        width: 1,
+        height: inner.height,
+    };
+
+    frame.render_widget(Paragraph::new(Text::from(scrollbar_lines)), scrollbar_area);
+    frame.render_widget(Paragraph::new(Text::from(border_lines)), border_indicator_area);
 }
 
 fn diff_background_for_change(change: Option<PreviewLineChange>) -> Option<Color> {
@@ -819,10 +980,27 @@ pub fn draw_preview(
     theme: &ThemeProfile,
 ) {
     frame.render_widget(Clear, area);
+    let has_search = state.preview_search.is_some();
+    let (block_area, search_bar_area) = if has_search {
+        let chunks = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([
+                ratatui::layout::Constraint::Length(1),
+                ratatui::layout::Constraint::Min(0),
+            ])
+            .split(area);
+        (chunks[1], chunks[0])
+    } else {
+        (area, ratatui::layout::Rect::default())
+    };
+
     let title = preview_title_for_state(state);
     let total_lines = preview_total_lines(doc);
-    let metadata_line =
-        preview_border_bottom_line(state, total_lines, area.width.saturating_sub(2) as usize);
+    let metadata_line = preview_border_bottom_line(
+        state,
+        total_lines,
+        block_area.width.saturating_sub(2) as usize,
+    );
     let block = Block::default()
         .title(
             Line::from(vec![Span::raw(" "), Span::raw(title), Span::raw(" ")])
@@ -830,8 +1008,12 @@ pub fn draw_preview(
         )
         .title_bottom(Line::from(metadata_line).alignment(Alignment::Left))
         .borders(Borders::ALL);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = block.inner(block_area);
+    frame.render_widget(block, block_area);
+    render_bottom_diff_badge(frame, block_area, state, total_lines);
+    if let Some(search) = &state.preview_search {
+        render_search_bar(frame, search_bar_area, search);
+    }
 
     state.preview_inner_rect = (inner.x, inner.y, inner.width, inner.height);
 
@@ -909,6 +1091,7 @@ pub fn draw_preview(
         rendered_total_lines,
         scroll_row_usize,
         &cache.rendered_row_changes,
+        state.preview_search.as_ref(),
     );
 
     if let Some(sel) = &state.preview_selection {
@@ -920,6 +1103,18 @@ pub fn draw_preview(
             scroll_row_usize,
             state.preview_scroll_col,
             state.preview_line_number_cols,
+        );
+    }
+
+    if let Some(search) = &state.preview_search {
+        apply_search_highlights(
+            frame,
+            inner,
+            search,
+            scroll_row_usize,
+            state.preview_scroll_col,
+            state.preview_line_number_cols,
+            &doc.content_excerpt.lines().collect::<Vec<&str>>(),
         );
     }
 
@@ -936,10 +1131,5 @@ pub fn draw_preview(
         if doc.line_changes.iter().all(|change| change.is_none()) {
             render_overlay_label(frame, inner, " No changes ", bold_inverted);
         }
-        let diff_style = Style::default()
-            .fg(DIFF_BADGE_FG)
-            .bg(DIFF_BADGE_BG)
-            .add_modifier(Modifier::BOLD);
-        render_border_label_top_left(frame, area, " DIFF ", diff_style);
     }
 }

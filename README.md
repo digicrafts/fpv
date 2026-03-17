@@ -139,7 +139,7 @@ Other files are shown as plain text or with a safe fallback.
 
 | Planned feature | Completed |
 | -------------- | --------- |
-| In-preview search across file content | [ ] |
+| In-preview search across text content | [✓] |
 | Theme refinement and usability improvements | [ ] |
 | Plugin architecture for extensible preview features | [ ] |
 | Git graph view for commit history context | [ ] |

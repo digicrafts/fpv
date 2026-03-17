@@ -35,6 +35,11 @@ pub const DIFF_MARKER_DELETED: Color = Color::LightRed;
 pub const SELECTION_BG: Color = Color::LightBlue;
 pub const SELECTION_FG: Color = Color::Black;
 
+// ── Search highlights ────────────────────────────────────────────────────
+pub const SEARCH_MATCH_BG: Color = Color::Yellow;
+pub const SEARCH_CURRENT_MATCH_BG: Color = Color::Rgb(255, 165, 0); // Orange
+pub const SEARCH_MATCH_FG: Color = Color::Black;
+
 // ── Scrollbar ────────────────────────────────────────────────────────────
 pub const SCROLLBAR_TRACK: Color = Color::DarkGray;
 pub const SCROLLBAR_THUMB: Color = Color::Gray;

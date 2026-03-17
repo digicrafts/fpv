@@ -126,6 +126,23 @@ fn mouse_to_content_position(state: &SessionState, mouse: MouseEvent) -> Content
     }
 }
 
+fn match_index_at_position(
+    search: &crate::app::state::PreviewSearch,
+    pos: ContentPosition,
+) -> Option<usize> {
+    for (idx, &(line, col_start, col_end)) in search.match_positions.iter().enumerate() {
+        if line == pos.row && pos.col >= col_start && pos.col < col_end {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+fn clear_preview_search(state: &mut SessionState) {
+    state.preview_search = None;
+    state.preview_search_input_active = false;
+}
+
 fn rendered_preview_total_lines(state: &SessionState, preview_total_lines: usize) -> usize {
     state
         .preview_render_cache
@@ -511,6 +528,81 @@ pub fn process_once(
                 }
             }
 
+            if state.preview_search_input_active {
+                use crossterm::event::KeyCode;
+                match key.code {
+                    KeyCode::Esc => {
+                        state.preview_search_input_active = false;
+                        state.preview_search = None;
+                        state.preview_scroll_row = 0;
+                        state.preview_scroll_col = 0;
+                        return Ok((false, false, false));
+                    }
+                    KeyCode::Backspace => {
+                        if let Some(ref mut search) = state.preview_search {
+                            search.query.pop();
+                            let matches = crate::app::preview_search::find_all_matches(
+                                preview_doc,
+                                &search.query,
+                                search.case_sensitive,
+                            );
+                            search.match_positions = matches;
+                            search.current_match_index = 0;
+                        }
+                        return Ok((false, false, false));
+                    }
+                    KeyCode::Down => {
+                        if let Some(ref mut search) = state.preview_search {
+                            crate::app::preview_search::next_match(search);
+                            if !search.match_positions.is_empty() {
+                                let (line, _, _) = search.match_positions[search.current_match_index];
+                                state.preview_scroll_row = line;
+                            }
+                        }
+                        return Ok((false, false, false));
+                    }
+                    KeyCode::Up => {
+                        if let Some(ref mut search) = state.preview_search {
+                            crate::app::preview_search::prev_match(search);
+                            if !search.match_positions.is_empty() {
+                                let (line, _, _) = search.match_positions[search.current_match_index];
+                                state.preview_scroll_row = line;
+                            }
+                        }
+                        return Ok((false, false, false));
+                    }
+                    KeyCode::Enter => {
+                        if let Some(ref mut search) = state.preview_search {
+                            search.case_sensitive = !search.case_sensitive;
+                            let matches = crate::app::preview_search::find_all_matches(
+                                preview_doc,
+                                &search.query,
+                                search.case_sensitive,
+                            );
+                            search.match_positions = matches;
+                            search.current_match_index = 0;
+                        }
+                        return Ok((false, false, false));
+                    }
+                    KeyCode::Char(c) => {
+                        if let Some(ref mut search) = state.preview_search {
+                            search.query.push(c);
+                            let matches = crate::app::preview_search::find_all_matches(
+                                preview_doc,
+                                &search.query,
+                                search.case_sensitive,
+                            );
+                            search.match_positions = matches;
+                            search.current_match_index = 0;
+                        }
+                        return Ok((false, false, false));
+                    }
+                    _ => {
+                        return Ok((false, false, false));
+                    }
+                }
+            }
+
             if let Some(action) = map_key_to_action(key, bindings) {
                 match action {
                     Action::ToggleHelp => {
@@ -527,9 +619,13 @@ pub fn process_once(
                                 preview_viewport_rows,
                             );
                         } else {
+                            let previous_index = state.selected_index;
                             move_up(state);
                             state.update_selected_path(nodes);
                             state.reset_preview_scroll();
+                            if state.selected_index != previous_index {
+                                clear_preview_search(state);
+                            }
                             should_refresh_preview = true;
                         }
                     }
@@ -544,9 +640,13 @@ pub fn process_once(
                                 preview_viewport_rows,
                             );
                         } else {
+                            let previous_index = state.selected_index;
                             move_down(state, nodes.len());
                             state.update_selected_path(nodes);
                             state.reset_preview_scroll();
+                            if state.selected_index != previous_index {
+                                clear_preview_search(state);
+                            }
                             should_refresh_preview = true;
                         }
                     }
@@ -559,6 +659,7 @@ pub fn process_once(
                             let mw = preview_max_line_width(preview_doc);
                             let _ = state.scroll_preview_cols(1, mw, vp);
                         } else if !state.preview_fullscreen {
+                            clear_preview_search(state);
                             let result = enter_selected_directory(state, nodes)?;
                             state.status_message = format_status_with_path(
                                 &navigation_status_message(&result),
@@ -579,6 +680,7 @@ pub fn process_once(
                         } else if !state.preview_fullscreen
                             && !is_filesystem_root(&state.current_path)
                         {
+                            clear_preview_search(state);
                             let result = go_to_parent_directory(state, nodes)?;
                             state.status_message = format_status_with_path(
                                 &navigation_status_message(&result),
@@ -597,6 +699,7 @@ pub fn process_once(
                                 if state.focus_pane == FocusPane::Tree
                                     && node.node_type == NodeType::Directory
                                 {
+                                    clear_preview_search(state);
                                     let result = enter_selected_directory(state, nodes)?;
                                     state.status_message = format_status_with_path(
                                         &navigation_status_message(&result),
@@ -761,6 +864,16 @@ pub fn process_once(
                         state.reset_preview_scroll();
                         should_refresh_preview = true;
                     }
+                    Action::SearchPreview => {
+                        if state.help_overlay_visible {
+                            return Ok((false, false, false));
+                        }
+                        if !state.preview_fullscreen {
+                            state.preview_search_input_active = true;
+                            state.preview_search = Some(crate::app::state::PreviewSearch::default());
+                            state.preview_selection = None;
+                        }
+                    }
                     Action::Quit => return Ok((true, false, false)),
                 }
             }
@@ -776,6 +889,20 @@ pub fn process_once(
             if !state.divider_drag_active {
                 state.preview_copy_indicator = false;
                 let rendered_total_lines = rendered_preview_total_lines(state, preview_total_lines);
+
+                if state.preview_search.is_some()
+                    && in_preview_panel(state, mouse)
+                    && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                {
+                    let pos = mouse_to_content_position(state, mouse);
+                    if let Some(search) = state.preview_search.as_mut() {
+                        if let Some(idx) = match_index_at_position(search, pos) {
+                            search.current_match_index = idx;
+                            return Ok((false, false, false));
+                        }
+                    }
+                }
+
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
                         // If we were selecting, finalize the previous selection
@@ -786,9 +913,13 @@ pub fn process_once(
 
                         let mut tree_clicked = false;
                         if let Some(index) = tree_index_for_click(state, mouse, nodes.len()) {
+                            let previous_index = state.selected_index;
                             state.selected_index = index;
                             state.update_selected_path(nodes);
                             state.reset_preview_scroll();
+                            if state.selected_index != previous_index {
+                                clear_preview_search(state);
+                            }
                             should_refresh_preview = true;
                             tree_clicked = true;
 

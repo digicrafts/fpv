@@ -26,6 +26,7 @@ pub enum Action {
     ResizePreviewWider,
     Refresh,
     ToggleDiffPreview,
+    SearchPreview,
     Quit,
 }
 
@@ -123,6 +124,10 @@ pub fn default_keymap() -> HashMap<Action, KeyEvent> {
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
         ),
         (
+            Action::SearchPreview,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+        ),
+        (
             Action::Quit,
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         ),
@@ -152,6 +157,7 @@ pub fn action_from_name(name: &str) -> Option<Action> {
         "resize_preview_wider" => Some(Action::ResizePreviewWider),
         "refresh" => Some(Action::Refresh),
         "toggle_diff_preview" => Some(Action::ToggleDiffPreview),
+        "search_preview" => Some(Action::SearchPreview),
         "quit" => Some(Action::Quit),
         _ => None,
     }

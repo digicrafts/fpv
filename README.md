@@ -1,4 +1,4 @@
-# fpv — Fast Previewer TUI
+# fpv — Ultra Fast Previewer TUI
 [![release](https://github.com/digicrafts/fpv/actions/workflows/release.yml/badge.svg?style=flat-square)](https://github.com/digicrafts/fpv/actions/workflows/release.yml)
 [![GitHub stars](https://img.shields.io/github/stars/digicrafts/fpv?style=flat-square)](https://github.com/digicrafts/fpv/stargazers)
 [![GitHub downloads](https://img.shields.io/github/downloads/digicrafts/fpv/total)](https://github.com/digicrafts/fpv/releases)

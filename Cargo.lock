@@ -428,6 +428,7 @@ dependencies = [
  "jpeg-decoder",
  "predicates",
  "ratatui",
+ "regex",
  "serde",
  "tempfile",
  "time",

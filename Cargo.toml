@@ -21,6 +21,7 @@ ignore = "0.4"
 image = { version = "0.25.5", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "pnm", "tga", "tiff", "webp"] }
 ratatui = "0.29"
 serde = { version = "1", features = ["derive"] }
+regex = "1.10"
 toml = "0.8"
 unicode-width = "0.1"
 time = "0.3"

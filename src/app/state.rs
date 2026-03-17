@@ -88,6 +88,25 @@ pub enum PreviewLineChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewSearch {
+    pub query: String,
+    pub case_sensitive: bool,
+    pub current_match_index: usize,
+    pub match_positions: Vec<(usize, usize, usize)>, // (line, col_start, col_end)
+}
+
+impl Default for PreviewSearch {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            case_sensitive: false,
+            current_match_index: 0,
+            match_positions: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewRenderCacheKey {
     pub epoch: u64,
     pub inner_width: u16,
@@ -244,6 +263,8 @@ pub struct SessionState {
     pub preview_copy_indicator: bool,
     pub preview_copying_indicator: bool,
     pub preview_diff_mode: bool,
+    pub preview_search: Option<PreviewSearch>,
+    pub preview_search_input_active: bool,
     pub help_overlay_visible: bool,
     pub status_display_mode: StatusDisplayMode,
     pub git_status: Option<GitRepoStatus>,
@@ -292,6 +313,8 @@ impl SessionState {
             preview_copy_indicator: false,
             preview_copying_indicator: false,
             preview_diff_mode: false,
+            preview_search: None,
+            preview_search_input_active: false,
             help_overlay_visible: false,
             status_display_mode: StatusDisplayMode::Bar,
             git_status: None,

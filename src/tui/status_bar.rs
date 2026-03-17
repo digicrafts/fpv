@@ -44,25 +44,59 @@ pub fn compose_shortcut_help_text(bindings: &HashMap<Action, KeyEvent>) -> Strin
     let collapse = key_display(bindings, Action::Collapse, "Left");
     let open = key_display(bindings, Action::Open, "Enter");
     let quit = key_display(bindings, Action::Quit, "q");
-    let focus = key_display(bindings, Action::SwitchFocus, "Tab");
+    // let focus = key_display(bindings, Action::SwitchFocus, "Tab");
     let hidden = key_display(bindings, Action::ToggleHidden, "h");
-    let narrower = key_display(bindings, Action::ResizePreviewNarrower, "Ctrl+Left");
-    let wider = key_display(bindings, Action::ResizePreviewWider, "Ctrl+Right");
+    // let narrower = key_display(bindings, Action::ResizePreviewNarrower, "Ctrl+Left");
+    // let wider = key_display(bindings, Action::ResizePreviewWider, "Ctrl+Right");
     let page_up = key_display(bindings, Action::PageUp, "PageUp");
     let page_down = key_display(bindings, Action::PageDown, "PageDown");
-    let scroll_up = key_display(bindings, Action::PreviewScrollUp, "'");
-    let scroll_down = key_display(bindings, Action::PreviewScrollDown, "/");
+    // let scroll_up = key_display(bindings, Action::PreviewScrollUp, "'");
+    // let scroll_down = key_display(bindings, Action::PreviewScrollDown, "/");
     let toggle_lines = key_display(bindings, Action::TogglePreviewLineNumbers, "l");
     let toggle_wrap = key_display(bindings, Action::TogglePreviewWrap, "w");
     let scroll_left = key_display(bindings, Action::PreviewScrollLeft, "Shift+Left");
     let scroll_right = key_display(bindings, Action::PreviewScrollRight, "Shift+Right");
     let esc = key_display(bindings, Action::ExitFullscreenPreview, "Esc");
     let help = key_display(bindings, Action::ToggleHelp, "?");
-    let refresh = key_display(bindings, Action::Refresh, "F5");
+    // let refresh = key_display(bindings, Action::Refresh, "F5");
     let diff = key_display(bindings, Action::ToggleDiffPreview, "d");
+    let search = key_display(bindings, Action::SearchPreview, "f");
 
-    format!(
-        "Shortcuts\n\nNavigation\n  {up}/{down}: move selection\n  {expand}: enter directory\n  {collapse}: parent directory\n  {open}: open (directory/fullscreen)\n\nPanels\n  {focus}: switch tree/preview focus\n  {narrower}/{wider}: resize preview panel\n\nPreview\n  {scroll_up}/{scroll_down}: scroll 3 lines\n  {scroll_left}/{scroll_right}: scroll horizontally\n  {page_up}/{page_down}: page up/down\n  {toggle_lines}: toggle line numbers\n  {toggle_wrap}: toggle wrap\n  {diff}: toggle git diff preview\n  {esc}: exit fullscreen\n  Mouse drag: select text (copies on release)\n  Shift+Scroll: horizontal scroll\n\nOther\n  {hidden}: show/hide hidden files\n  {refresh}: refresh tree & preview\n  {help}: close help\n  {quit}: quit fpv\n\nAuto-refresh: tree updates automatically on file changes"
+    format!("
+    [Navigation]
+
+        move selection:              {up}/{down}
+        enter directory:             {expand}
+        parent directory:            {collapse}
+        open (directory/fullscreen): {open}
+
+    [Preview]
+
+        scroll vertically:           Shift+{up}/{down}
+        horizontal scroll:           Shift+{scroll_left}/{scroll_right}
+        toggle line numbers:         {toggle_lines}
+        toggle wrap:                 {toggle_wrap}
+        toggle git diff preview:     {diff}
+        select text (copies on release): Mouse drag
+
+    [Preview (fullscreen)]
+
+        page up/down:                {page_up}/{page_down}
+        exit fullscreen:             {esc}
+
+    [Search]
+
+        search in preview:           {search}
+        next/prev match (while searching): Up/Down
+        toggle case sensitivity:     Enter
+        exit search:                 Esc
+
+    [Other]
+
+        show/hide hidden files:      {hidden}
+        toggle help:                 {help}
+        quit fpv:                    {quit}
+        ",
     )
 }
 
